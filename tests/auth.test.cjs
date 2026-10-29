@@ -14,6 +14,7 @@ require.extensions[".ts"] = (module, filename) => {
 
 process.env.NODE_ENV = "development";
 process.env.VERCEL = "";
+process.env.VERCEL_PROJECT_PRODUCTION_URL = "";
 process.env.CHAT_PASSWORD = "test-workshop-password";
 process.env.SESSION_SECRET = "offline-test-secret-32-characters-long";
 process.env.OPENROUTER_API_KEY = "";
@@ -145,7 +146,8 @@ test("ochrona czatu bez platnych wywolan", async (t) => {
 
   await t.test("produkcja sprawdza wspolny limit i ustawia Secure", async () => {
     process.env.VERCEL = "1";
-    process.env.VERCEL_URL = "offline-test.vercel.app";
+    process.env.VERCEL_URL = "protected-deployment.vercel.app";
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "offline-test.vercel.app";
     let status = 404;
     const firewallFetch = t.mock.method(global, "fetch", async (url, init) => {
       assert.match(url, /^https:\/\/offline-test\.vercel\.app\/\.well-known\/vercel\/rate-limit-api\/workshop-login$/);
@@ -163,5 +165,15 @@ test("ochrona czatu bez platnych wywolan", async (t) => {
     assert.equal(firewallFetch.mock.callCount(), 3);
     firewallFetch.mock.restore();
     assert.equal((await login(makeRequest("/api/auth/login", { password: "test-workshop-password" }))).status, 503);
+  });
+
+  await t.test("brak publicznego adresu blokuje logowanie bez proby chronionego wdrozenia", async () => {
+    process.env.VERCEL_PROJECT_PRODUCTION_URL = "";
+    const blockedFetch = t.mock.method(global, "fetch", async () => {
+      throw new Error("Nie wolno laczyc sie z technicznym adresem wdrozenia");
+    });
+    assert.equal((await login(makeRequest("/api/auth/login", { password: "test-workshop-password" }))).status, 503);
+    assert.equal(blockedFetch.mock.callCount(), 0);
+    blockedFetch.mock.restore();
   });
 });

@@ -18,7 +18,9 @@ export async function limitLogin() {
   }
 
   // Produkcja wymaga wspólnej usługi. Brak reguły lub awaria blokują logowanie.
-  const host = process.env.VERCEL_URL;
+  // Adres produkcyjny jest publiczny. Techniczny VERCEL_URL może wymagać
+  // logowania do Vercel i zwracać przekierowanie zamiast wyniku limitera.
+  const host = process.env.VERCEL_PROJECT_PRODUCTION_URL;
   if (process.env.NODE_ENV !== "production" || process.env.VERCEL !== "1" || !host || !/^[a-z0-9.-]+\.vercel\.app$/i.test(host)) {
     return new Response(AUTH_MESSAGES.limiter, { status: 503 });
   }
