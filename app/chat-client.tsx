@@ -5,10 +5,13 @@ import { DefaultChatTransport } from "ai";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { CHAT_ERRORS } from "../lib/chat-errors";
 import { AUTH_MESSAGES } from "../lib/auth-messages";
+import AnalysisPanel from "./analysis-panel";
 
 const transport = new DefaultChatTransport({ api: "/api/chat" });
 
 export default function ChatClient() {
+  const [mode, setMode] = useState<"chat" | "analysis">("chat");
+  const [analysisBusy, setAnalysisBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [leaving, setLeaving] = useState(false);
   const [logoutError, setLogoutError] = useState("");
@@ -27,7 +30,7 @@ export default function ChatClient() {
   useEffect(() => {
     const element = conversation.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [messages, status]);
+  }, [messages, status, mode]);
 
   function submitMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -63,39 +66,49 @@ export default function ChatClient() {
         </button>
       </header>
       {logoutError && <p className="error" role="alert">{logoutError}</p>}
-      <div ref={conversation} className="conversation" role="log" aria-label="Rozmowa" aria-live="polite" aria-busy={waiting}>
-        {messages.map((item) => (
-          <div className={`message message--${item.role}`} key={item.id}>
-            <strong>{item.role === "user" ? "Ty" : "Chatbot"}</strong>
-            {item.parts.map((part, index) =>
-              part.type === "text" ? <span key={index}>{part.text}</span> : null,
-            )}
+      <nav className="mode-switch" aria-label="Tryb pracy">
+        <button type="button" aria-pressed={mode === "chat"} onClick={() => setMode("chat")} disabled={waiting || analysisBusy || leaving}>Zwykły czat</button>
+        <button type="button" aria-pressed={mode === "analysis"} onClick={() => setMode("analysis")} disabled={waiting || analysisBusy || leaving}>Analiza wiadomości</button>
+      </nav>
+      {mode === "analysis" ? (
+        <AnalysisPanel leaving={leaving} onBusyChange={setAnalysisBusy} />
+      ) : (
+        <>
+          <div ref={conversation} className="conversation" role="log" aria-label="Rozmowa" aria-live="polite" aria-busy={waiting}>
+            {messages.map((item) => (
+              <div className={`message message--${item.role}`} key={item.id}>
+                <strong>{item.role === "user" ? "Ty" : "Chatbot"}</strong>
+                {item.parts.map((part, index) =>
+                  part.type === "text" ? <span key={index}>{part.text}</span> : null,
+                )}
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
-      {waiting && (
-        <p className="status" role="status">
-          {status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
-        </p>
+          {waiting && (
+            <p className="status" role="status">
+              {status === "submitted" ? "Czekam na odpowiedź…" : "Chatbot pisze…"}
+            </p>
+          )}
+          {error && <p className="error" role="alert">{errorMessage}</p>}
+          <form onSubmit={submitMessage}>
+            <label htmlFor="message">Wiadomość</label>
+            <div className="composer">
+              <input
+                id="message"
+                name="message"
+                value={message}
+                onChange={(event) => setMessage(event.target.value)}
+                placeholder="Napisz wiadomość…"
+                autoComplete="off"
+                disabled={waiting || leaving}
+              />
+              <button type="submit" disabled={waiting || leaving || !message.trim()}>
+                {waiting ? "Czekaj…" : "Wyślij"}
+              </button>
+            </div>
+          </form>
+        </>
       )}
-      {error && <p className="error" role="alert">{errorMessage}</p>}
-      <form onSubmit={submitMessage}>
-        <label htmlFor="message">Wiadomość</label>
-        <div className="composer">
-          <input
-            id="message"
-            name="message"
-            value={message}
-            onChange={(event) => setMessage(event.target.value)}
-            placeholder="Napisz wiadomość…"
-            autoComplete="off"
-            disabled={waiting || leaving}
-          />
-          <button type="submit" disabled={waiting || leaving || !message.trim()}>
-            {waiting ? "Czekaj…" : "Wyślij"}
-          </button>
-        </div>
-      </form>
     </main>
   );
 }

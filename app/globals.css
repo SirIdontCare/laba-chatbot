@@ -72,3 +72,22 @@ button {
 button:hover { background: #203ba1; }
 button:disabled { background: #53627d; cursor: default; }
 :focus-visible { outline: 3px solid #426bff; outline-offset: 3px; }
+
+.mode-switch { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 24px; }
+.mode-switch button[aria-pressed="false"] { background: #e1e6f0; color: #172033; }
+.mode-switch button[aria-pressed="true"] { box-shadow: inset 0 -3px 0 #112569; }
+textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 12px;
+  border: 1px solid #8b97aa;
+  border-radius: 8px;
+  font: inherit;
+  line-height: 1.5;
+}
+.analysis-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+.analysis-result { margin-top: 24px; padding: 20px; background: white; border: 1px solid #cbd2de; border-radius: 12px; }
+.analysis-result h3 { margin-top: 0; }
+.analysis-result dt { font-weight: 600; margin-top: 14px; }
+.analysis-result dd { margin: 4px 0 0; }
+.analysis-draft { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.6; }
