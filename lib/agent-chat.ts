@@ -22,6 +22,7 @@ import { createAgentTools } from "./agent-tools";
 import { AGENT_STEP_LIMIT } from "./tool-catalog";
 import { validSession } from "./session";
 import { saveChatTurn } from "./chat-history";
+import { loadUserProfile, PROFILE_INSTRUCTIONS } from "./user-profile";
 
 const turnIdSchema = z.uuid();
 
@@ -38,7 +39,8 @@ export async function agentChat(
   let messages: ChatMessage[];
   // Token pozostaje po stronie serwera; model nie wybiera przestrzeni notatek.
   const scope = createHash("sha256").update(token).digest("hex");
-  const localTools = createAgentTools(scope);
+  const localTools = createAgentTools(scope, token, () => messages?.at(-1)?.parts
+    .filter(part => part.type === "text").map(part => part.text).join(" ") ?? "");
   const isLocalToolPart = (type: string) => type.startsWith("tool-") && Object.hasOwn(localTools, type.slice(5));
 
   try {
@@ -95,6 +97,7 @@ export async function agentChat(
   const unavailableMessage = hasPhoto ? CHAT_ERRORS.visionUnavailable : CHAT_ERRORS.unavailable;
 
   try {
+    const profile = await loadUserProfile();
     const openrouter = createOpenRouter({ apiKey });
     const question = messages.at(-1)!;
     const lastQuestion = question.parts
@@ -156,7 +159,8 @@ export async function agentChat(
     let inspectedImage = messages.some((message) => message.parts.some((part) => part.type === "tool-obejrzyjObraz" && part.state === "output-available"));
     const result = streamText({
       model: openrouter(model, { parallelToolCalls: false }),
-      instructions: AGENT_CHAT_INSTRUCTIONS + (intent === "image"
+      instructions: AGENT_CHAT_INSTRUCTIONS + PROFILE_INSTRUCTIONS +
+        "\nDane profilu użytkownika (JSON):\n" + JSON.stringify(profile) + (intent === "image"
         ? "\nUżytkownik użył przycisku generowania. Wywołaj generujObraz dokładnie raz, używając ostatniej wiadomości jako prompt bez zmiany opisu." : ""),
       messages: await convertToModelMessages(history, {
         tools: localTools,

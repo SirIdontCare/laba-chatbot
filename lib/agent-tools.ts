@@ -8,9 +8,11 @@ import { kalkulator, createNotesTool, createDiagnosticsTool } from "./local-tool
 import { generujObraz } from "./image-generation";
 import { obejrzyjObraz } from "./image-inspection";
 import { AGENT_STEP_LIMIT } from "./tool-catalog";
+import { createProfileTool } from "./user-profile";
 
-export function createAgentTools(sessionScope: string) {
+export function createAgentTools(sessionScope: string, token = "", currentMessage = () => "") {
   const tools = { aktualnyCzas, czas, pogoda, waluty, swieta, wikipedia, kalkulator,
-    notatki: createNotesTool(sessionScope), generujObraz, obejrzyjObraz };
+    notatki: createNotesTool(sessionScope), generujObraz, obejrzyjObraz,
+    zapiszProfil: createProfileTool(token, currentMessage) };
   return { ...tools, diagnostyka: createDiagnosticsTool([...Object.keys(tools), "diagnostyka", "web_search"], AGENT_STEP_LIMIT) };
 }
