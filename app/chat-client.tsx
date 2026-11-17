@@ -45,9 +45,10 @@ function readPhoto(file: File): Promise<FileUIPart> {
   });
 }
 
-export default function ChatClient({ initialChat, historyError }: {
+export default function ChatClient({ initialChat, historyError, profileName }: {
   initialChat: { id: string; messages: ChatMessage[] };
   historyError?: string;
+  profileName?: string | null;
 }) {
   const chatId = useRef(initialChat.id);
   useEffect(() => {
@@ -138,14 +139,7 @@ export default function ChatClient({ initialChat, historyError }: {
   }
 
   function startNewChat() {
-    chatId.current = crypto.randomUUID();
-    window.history.replaceState(null, "", `/?chat=${chatId.current}`);
-    setMessages([]);
-    setMessage("");
-    setPhoto(undefined);
-    setImageError("");
-    clearError();
-    setMode("chat");
+    window.location.assign("/?new=1");
   }
 
   async function logout() {
@@ -186,7 +180,7 @@ export default function ChatClient({ initialChat, historyError }: {
           <div><p className="eyebrow">TWOJA PRZESTRZEŃ AI</p><h1>Mój chatbot</h1>
             <p className="header-description">Rozmawiaj, odkrywaj i twórz z pomocą AI.</p></div>
         </div>
-        <div className="header-actions"><a href="/history">Historia</a><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
+        <div className="header-actions"><a href="/profile">Profil</a><a href="/history">Historia</a><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
         <button className="secondary-button" type="button" onClick={logout} disabled={leaving}>
           {leaving ? "Wychodzę…" : "Wyjdź"}
         </button></div>
@@ -207,8 +201,8 @@ export default function ChatClient({ initialChat, historyError }: {
               <div className="empty-conversation">
                 <span className="welcome-mark" aria-hidden="true">✳</span>
                 <p className="eyebrow">OD POMYSŁU DO ODPOWIEDZI</p>
-                <h2>Od czego zaczynamy?</h2>
-                <p>Zadaj pytanie, dodaj zdjęcie lub opisz obraz, który chcesz stworzyć.</p>
+                <h2>{profileName ? `Cześć, ${profileName}!` : "Cześć!"}</h2>
+                <p>{profileName ? "Od czego zaczynamy? Zadaj pytanie lub opisz zadanie." : "Jak mam się do Ciebie zwracać? Napisz też, w czym mogę pomóc."}</p>
                 <div className="welcome-tags" aria-hidden="true"><span>Rozmowa</span><span>Zdjęcia i obrazy</span><span>Źródła i narzędzia</span></div>
               </div>
             )}
