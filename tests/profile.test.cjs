@@ -33,13 +33,13 @@ test("profil zachowuje polską odmianę i toleruje wielkość liter cytatu", asy
     preferences: { jedzenie: { value: "pizza", quote: "lubię pizzę" } },
   }, options);
   assert.equal(result.ok, true);
-  assert.deepEqual(result.zapamietano, { name: "Paweł", jedzenie: "lubię pizzę" });
+  assert.deepEqual(result.zapamietano, { name: "Paweł", jedzenie: "pizza" });
   source = "Wolę krótkie odpowiedzi.";
   assert.equal((await tool.execute({ preferences: {
-    styl: { value: "zwięzły", quote: source },
+    styl: { value: "krótkie odpowiedzi", quote: source },
   } }, options)).ok, true);
   assert.deepEqual(await loadUserProfile(), {
-    name: "Paweł", preferences: { jedzenie: "lubię pizzę", styl: source },
+    name: "Paweł", preferences: { jedzenie: "pizza", styl: "krótkie odpowiedzi" },
   });
   for (const message of [
     "Czy lubię pizzę?", "Planuję mieszkać w Krakowie.", "To żart, lubię pizzę.",
@@ -95,4 +95,29 @@ test("edycja profilu: sesja, origin, zmiana imienia, pojedynczy fakt i czyszczen
   assert.equal(stored.name, null);
   assert.equal((await PATCH(request({ action: "clear" }, cookie))).status, 204);
   assert.deepEqual(stored, { name: null, preferences: {} });
+});
+
+test("wyliczenie czterech preferencji zapisuje cztery krótkie wartości", async t => {
+  const writes = [];
+  t.mock.method(global, "fetch", async (_url, options) => {
+    writes.push(JSON.parse(options.body));
+    return new Response(null, { status: 204 });
+  });
+  const token = await createSession(authConfig());
+  const source = "lubie jazdę na rowerze, pizze kanadyjską, grę na gitarze oraz kodowanie agentyczne";
+  const preferences = {
+    ulubiona_pizza: "pizza kanadyjska", hobby_kodowanie: "kodowanie agentyczne",
+    hobby_gra_na_gitarze: "gra na gitarze", hobby_jazda_na_rowerze: "jazda na rowerze",
+  };
+  const tool = createProfileTool(token, () => source);
+  const result = await tool.execute({ preferences: Object.fromEntries(
+    Object.entries(preferences).map(([key, value]) => [key, { value, quote: source }]),
+  ) }, { toolCallId: "list", messages: [] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(writes[0].p_preferences, preferences);
+  const rejected = await tool.execute({ preferences: {
+    ulubiona_pizza: { value: source, quote: source },
+  } }, { toolCallId: "bad-list", messages: [] });
+  assert.equal(rejected.ok, false);
+  assert.equal(writes.length, 1);
 });
