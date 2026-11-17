@@ -27,6 +27,16 @@ function explicitFact(quote: string) {
     !/[?„”«»"]/u.test(quote) && !/\b(?:nie|czy|cytat|przykład|powiedział|powiedziała)\b/iu.test(quote);
 }
 
+function supportedQuote(source: string, quote: string) {
+  const text = normalized(source);
+  const excerpt = normalized(quote);
+  if (!text.includes(excerpt)) return false;
+  if (explicitFact(excerpt)) return true;
+  // Fragment wyliczenia dziedziczy „lubię” z tego samego zdania.
+  return text.split(/(?<=[.!?\n])\s*/u)
+    .some(sentence => sentence.includes(excerpt) && explicitFact(sentence));
+}
+
 function groundedValue(value: string, quote: string) {
   const words = (text: string) => normalized(text).normalize("NFD").replace(/\p{M}/gu, "")
     .match(/\p{L}+/gu) ?? [];
@@ -126,7 +136,7 @@ export function createProfileTool(token: string, currentMessage: () => string) {
       const facts = [...entries.map(([, value]) => value), ...(input.name ? [input.name] : [])];
       if (!facts.length || entries.length > 10 || entries.some(([key]) => unsafe.test(key) || ["__proto__", "constructor", "prototype", "name"].includes(key)) ||
           unsafe.test(source) || uncertain.test(source) ||
-          facts.some(item => !normalized(source).includes(normalized(item.quote)) || !explicitFact(item.quote) ||
+          facts.some(item => !supportedQuote(source, item.quote) ||
             unsafe.test(item.value) || uncertain.test(item.quote))) {
         return toolFailure("Nie zapisano profilu. Potrzebne jest jednoznaczne, bezpieczne stwierdzenie użytkownika o sobie.");
       }

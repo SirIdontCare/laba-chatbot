@@ -121,3 +121,30 @@ test("wyliczenie czterech preferencji zapisuje cztery krótkie wartości", async
   assert.equal(rejected.ok, false);
   assert.equal(writes.length, 1);
 });
+
+test("krótkie cytaty w wyliczeniu dziedziczą deklarację lubię z tego samego zdania", async t => {
+  const writes = [];
+  t.mock.method(global, "fetch", async (_url, options) => {
+    writes.push(JSON.parse(options.body));
+    return new Response(null, { status: 204 });
+  });
+  const token = await createSession(authConfig());
+  let source = "lubię włochy, prowdzić kursy, jeżdzić na wycieczki oraz trening siłowy";
+  const tool = createProfileTool(token, () => source);
+  const preferences = {
+    ulubiony_kraj: { value: "Włochy", quote: "włochy" },
+    hobby_kursy: { value: "prowadzić kursy", quote: "prowdzić kursy" },
+    hobby_wycieczki: { value: "jeździć na wycieczki", quote: "jeżdzić na wycieczki" },
+    hobby_trening: { value: "trening siłowy", quote: "trening siłowy" },
+  };
+  const result = await tool.execute({ preferences }, { toolCallId: "short-quotes", messages: [] });
+  assert.equal(result.ok, true);
+  assert.deepEqual(writes[0].p_preferences, Object.fromEntries(
+    Object.entries(preferences).map(([key, item]) => [key, item.value]),
+  ));
+  source = "Lubię pizzę. Kolega lubi Włochy.";
+  assert.equal((await tool.execute({ preferences: {
+    ulubiony_kraj: { value: "Włochy", quote: "Włochy" },
+  } }, { toolCallId: "third-party", messages: [] })).ok, false);
+  assert.equal(writes.length, 1);
+});
