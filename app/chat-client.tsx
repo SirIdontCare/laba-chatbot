@@ -45,7 +45,11 @@ function readPhoto(file: File): Promise<FileUIPart> {
   });
 }
 
-export default function ChatClient() {
+export default function ChatClient({ initialChat, historyError }: {
+  initialChat: { id: string; messages: ChatMessage[] };
+  historyError?: string;
+}) {
+  const chatId = useRef(initialChat.id);
   const [mode, setMode] = useState<"chat" | "analysis">("chat");
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -60,6 +64,8 @@ export default function ChatClient() {
   const fileInput = useRef<HTMLInputElement>(null);
   const { messages, sendMessage, status, error, clearError, stop, setMessages } = useChat<ChatMessage>({
     transport,
+    messages: initialChat.messages,
+    generateId: () => crypto.randomUUID(),
     onError: (failure) => {
       if (failure.message === AUTH_MESSAGES.unauthorized) window.location.replace("/");
     },
@@ -89,7 +95,7 @@ export default function ChatClient() {
     setMessage("");
     setPhoto(undefined);
     try {
-      await sendMessage({ text, files });
+      await sendMessage({ text, files }, { body: { chatId: chatId.current } });
     } catch {
       setImageError(CHAT_ERRORS.unavailable);
     }
@@ -120,12 +126,22 @@ export default function ChatClient() {
     setGenerating(true);
     setMessage("");
     try {
-      await sendMessage({ text: prompt }, { body: { intent: "image" } });
+      await sendMessage({ text: prompt }, { body: { intent: "image", chatId: chatId.current } });
     } catch {
       setImageError(IMAGE_MESSAGES.unavailable);
     } finally {
       setGenerating(false);
     }
+  }
+
+  function startNewChat() {
+    chatId.current = crypto.randomUUID();
+    setMessages([]);
+    setMessage("");
+    setPhoto(undefined);
+    setImageError("");
+    clearError();
+    setMode("chat");
   }
 
   async function logout() {
@@ -175,11 +191,13 @@ export default function ChatClient() {
       <nav className="mode-switch" aria-label="Tryb pracy">
         <button type="button" aria-pressed={mode === "chat"} onClick={() => setMode("chat")} disabled={waiting || analysisBusy || leaving}>Zwykły czat</button>
         <button type="button" aria-pressed={mode === "analysis"} onClick={() => setMode("analysis")} disabled={waiting || analysisBusy || leaving}>Analiza JSON</button>
+        <button type="button" className="secondary-button" onClick={startNewChat} disabled={waiting || analysisBusy || leaving}>Nowa rozmowa</button>
       </nav>
       {mode === "analysis" ? (
         <AnalysisPanel leaving={leaving} onBusyChange={setAnalysisBusy} />
       ) : (
         <>
+          {historyError && <p className="error" role="alert">{historyError}</p>}
           <div ref={conversation} className="conversation" role="log" aria-label="Rozmowa" aria-live="polite" aria-busy={waiting}>
             {messages.length === 0 && (
               <div className="empty-conversation">

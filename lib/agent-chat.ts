@@ -1,6 +1,7 @@
 import "server-only";
 import { createHash } from "node:crypto";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { z } from "zod";
 import {
   convertToModelMessages,
   createUIMessageStreamResponse,
@@ -8,6 +9,7 @@ import {
   streamText,
   toUIMessageStream,
   validateUIMessages,
+  type UIMessageChunk,
 } from "ai";
 import { chatMessageMetadataSchema, type ChatMessage } from "./chat-message";
 import { AGENT_CHAT_INSTRUCTIONS } from "./studio-nova";
@@ -18,10 +20,16 @@ import { IMAGE_MESSAGES } from "./image-input";
 import { imageToolInputSchema } from "./image-tool-schema";
 import { createAgentTools } from "./agent-tools";
 import { AGENT_STEP_LIMIT } from "./tool-catalog";
-import { requestToken } from "./session";
+import { validSession } from "./session";
+import { saveChatTurn } from "./chat-history";
 
+const turnIdSchema = z.uuid();
 
-export async function agentChat(request: Request, body: { messages: unknown; intent?: "image" }) {
+export async function agentChat(
+  request: Request,
+  { messages: inputMessages, intent, chatId }: { messages: unknown; intent?: "image"; chatId?: string },
+  token: string,
+) {
   const startedAt = Date.now();
   let toolCalls = 0;
   let stoppedReason = "";
@@ -29,13 +37,13 @@ export async function agentChat(request: Request, body: { messages: unknown; int
   const taskSignal = AbortSignal.any([request.signal, taskTimeout]);
   let messages: ChatMessage[];
   // Token pozostaje po stronie serwera; model nie wybiera przestrzeni notatek.
-  const scope = createHash("sha256").update(requestToken(request) ?? "").digest("hex");
+  const scope = createHash("sha256").update(token).digest("hex");
   const localTools = createAgentTools(scope);
   const isLocalToolPart = (type: string) => type.startsWith("tool-") && Object.hasOwn(localTools, type.slice(5));
 
   try {
     messages = await validateUIMessages<ChatMessage>({
-      messages: body?.messages,
+      messages: inputMessages,
       metadataSchema: chatMessageMetadataSchema.optional(),
       tools: localTools,
     });
@@ -59,13 +67,14 @@ export async function agentChat(request: Request, body: { messages: unknown; int
           ),
       ) ||
       lastMessage?.role !== "user" ||
+      (chatId && !turnIdSchema.safeParse(lastMessage.id).success) ||
       !lastMessage.parts.some(
         (part) => (part.type === "text" && part.text.trim().length > 0) || part.type === "file",
       )
     ) {
       return new Response(CHAT_ERRORS.invalid, { status: 400 });
     }
-    if (body.intent === "image") {
+    if (intent === "image") {
       const prompt = lastMessage.parts.filter((part) => part.type === "text").map((part) => part.text).join(" ");
       if (!imageToolInputSchema.safeParse({ prompt }).success || lastMessage.parts.some((part) => part.type === "file")) {
         return new Response(IMAGE_MESSAGES.invalidPrompt, { status: 400 });
@@ -87,7 +96,8 @@ export async function agentChat(request: Request, body: { messages: unknown; int
 
   try {
     const openrouter = createOpenRouter({ apiKey });
-    const lastQuestion = messages.at(-1)!.parts
+    const question = messages.at(-1)!;
+    const lastQuestion = question.parts
       .filter((part) => part.type === "text").map((part) => part.text).join(" ");
     const checkDateFirst = needsCurrentDate(lastQuestion);
     const tools = {
@@ -146,7 +156,7 @@ export async function agentChat(request: Request, body: { messages: unknown; int
     let inspectedImage = messages.some((message) => message.parts.some((part) => part.type === "tool-obejrzyjObraz" && part.state === "output-available"));
     const result = streamText({
       model: openrouter(model, { parallelToolCalls: false }),
-      instructions: AGENT_CHAT_INSTRUCTIONS + (body.intent === "image"
+      instructions: AGENT_CHAT_INSTRUCTIONS + (intent === "image"
         ? "\nUżytkownik użył przycisku generowania. Wywołaj generujObraz dokładnie raz, używając ostatniej wiadomości jako prompt bez zmiany opisu." : ""),
       messages: await convertToModelMessages(history, {
         tools: localTools,
@@ -155,7 +165,7 @@ export async function agentChat(request: Request, body: { messages: unknown; int
       tools,
       includeRawChunks: true,
       prepareStep: ({ stepNumber }) => {
-        if (body.intent === "image" && stepNumber === 0) {
+        if (intent === "image" && stepNumber === 0) {
           return { activeTools: ["generujObraz"], toolChoice: { type: "tool", toolName: "generujObraz" } };
         }
         if (checkDateFirst && stepNumber === 0) {
@@ -171,52 +181,74 @@ export async function agentChat(request: Request, body: { messages: unknown; int
       onError: () => {}, // Nie zapisujemy sekretów ani treści rozmowy w logach.
     });
 
-    return createUIMessageStreamResponse({
-      stream: toUIMessageStream({
-        stream: result.stream,
-        tools,
-        originalMessages: messages,
-        sendReasoning: false,
-        sendSources: true,
-        messageMetadata: ({ part }) => {
-          if (part.type === "start-step") { actualModelId = null; modelSteps++; }
-          if (part.type === "tool-call") {
-            executionSteps.push({ number: modelSteps, tool: part.toolName });
-            return { steps: [...executionSteps] };
+    let saveFailed = false;
+    const uiStream = toUIMessageStream({
+      stream: result.stream,
+      tools,
+      originalMessages: messages,
+      sendReasoning: false,
+      sendSources: true,
+      messageMetadata: ({ part }) => {
+        if (part.type === "start-step") { actualModelId = null; modelSteps++; }
+        if (part.type === "tool-call") {
+          executionSteps.push({ number: modelSteps, tool: part.toolName });
+          return { steps: [...executionSteps] };
+        }
+        // Wyszukiwanie natywne może raportować wyłącznie źródła, bez tool-call.
+        if (part.type === "source" && part.sourceType === "url") {
+          if (!executionSteps.some((step) => step.number === modelSteps && step.tool === "web_search")) {
+            executionSteps.push({ number: modelSteps, tool: "web_search" });
           }
-          // Wyszukiwanie natywne może raportować wyłącznie źródła, bez tool-call.
-          if (part.type === "source" && part.sourceType === "url") {
-            if (!executionSteps.some((step) => step.number === modelSteps && step.tool === "web_search")) {
-              executionSteps.push({ number: modelSteps, tool: "web_search" });
-            }
-            if (partialResults.length < 24) partialResults.push({ tool: "web_search", text: `${part.title ?? "Źródło"}: ${part.url}` });
-            return { steps: [...executionSteps] };
+          if (partialResults.length < 24) partialResults.push({ tool: "web_search", text: `${part.title ?? "Źródło"}: ${part.url}` });
+          return { steps: [...executionSteps] };
+        }
+        if (part.type === "tool-result" && partialResults.length < 24) {
+          // Wyniki narzędzi, bez rozumowania modelu i bez danych plików obrazowych.
+          const text = part.toolName === "generujObraz" || part.toolName === "obejrzyjObraz"
+            ? "Wynik obsługi obrazu jest widoczny w rozmowie."
+            : JSON.stringify(part.output)?.slice(0, 2000) ?? "Narzędzie nie zwróciło danych.";
+          partialResults.push({ tool: part.toolName, text });
+        }
+        if (part.type === "tool-result" && part.toolName === "obejrzyjObraz") inspectedImage = true;
+        if (part.type === "raw") {
+          const raw = part.rawValue;
+          if (raw && typeof raw === "object" && "model" in raw && typeof raw.model === "string" && raw.model.trim()) {
+            actualModelId = raw.model;
           }
-          if (part.type === "tool-result" && partialResults.length < 24) {
-            // Wyniki narzędzi, bez rozumowania modelu i bez danych plików obrazowych.
-            const text = part.toolName === "generujObraz" || part.toolName === "obejrzyjObraz"
-              ? "Wynik obsługi obrazu jest widoczny w rozmowie."
-              : JSON.stringify(part.output)?.slice(0, 2000) ?? "Narzędzie nie zwróciło danych.";
-            partialResults.push({ tool: part.toolName, text });
-          }
-          if (part.type === "tool-result" && part.toolName === "obejrzyjObraz") inspectedImage = true;
-          if (part.type === "raw") {
-            const raw = part.rawValue;
-            if (raw && typeof raw === "object" && "model" in raw && typeof raw.model === "string" && raw.model.trim()) {
-              actualModelId = raw.model;
-            }
-          }
-          if (part.type === "finish" || part.type === "abort") return {
-            stats: { steps: modelSteps, toolCalls, elapsedMs: Date.now() - startedAt },
-            stoppedReason: stoppedReason || (taskTimeout.aborted ? "Upłynął limit 60 sekund. Kończę z wynikiem częściowym." : toolCalls >= 16 ? "Osiągnięto limit 16 wywołań narzędzi." : ""),
-            retrievedAt: new Date().toISOString(), modelId: actualModelId, vision: hasPhoto || inspectedImage,
-            steps: [...executionSteps], limitReached: modelSteps >= AGENT_STEP_LIMIT,
-            partialResults,
-          };
-        },
-        onError: () => unavailableMessage,
-      }),
+        }
+        if (part.type === "finish" || part.type === "abort") return {
+          stats: { steps: modelSteps, toolCalls, elapsedMs: Date.now() - startedAt },
+          stoppedReason: stoppedReason || (taskTimeout.aborted ? "Upłynął limit 60 sekund. Kończę z wynikiem częściowym." : toolCalls >= 16 ? "Osiągnięto limit 16 wywołań narzędzi." : ""),
+          retrievedAt: new Date().toISOString(), modelId: actualModelId, vision: hasPhoto || inspectedImage,
+          steps: [...executionSteps], limitReached: modelSteps >= AGENT_STEP_LIMIT,
+          partialResults,
+        };
+      },
+      onError: () => unavailableMessage,
+      onEnd: chatId ? async ({ isAborted, isCancelled, outcome, finishReason, responseMessage }) => {
+        if (isAborted || isCancelled || outcome.status !== "completed" || finishReason === "error") return;
+        try {
+          if (!await validSession(token)) throw new Error("Session expired.");
+          await saveChatTurn(token, chatId, question, responseMessage);
+        } catch {
+          saveFailed = true;
+        }
+      } : undefined,
     });
+
+    // Potwierdzenie zakończenia dociera do klienta dopiero po powrocie z Supabase.
+    let finishChunk: UIMessageChunk | undefined;
+    const stream = chatId ? uiStream.pipeThrough(new TransformStream<UIMessageChunk, UIMessageChunk>({
+      transform(chunk, controller) {
+        if (chunk.type === "finish") finishChunk = chunk;
+        else controller.enqueue(chunk);
+      },
+      flush(controller) {
+        if (saveFailed) controller.enqueue({ type: "error", errorText: CHAT_ERRORS.save });
+        else if (finishChunk) controller.enqueue(finishChunk);
+      },
+    })) : uiStream;
+    return createUIMessageStreamResponse({ stream });
   } catch {
     return new Response(unavailableMessage, { status: 502 });
   }

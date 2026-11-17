@@ -27,7 +27,7 @@ button:disabled { background: light-dark(#e6ebe7, #2d3d33); border-color: light-
 .secondary-button:hover, .image-actions button:hover, .photo-preview button:hover, .analysis-actions button + button:hover { background: var(--accent-soft); border-color: light-dark(#a9c6bb, #688e7a); }
 button:disabled:hover { background: light-dark(#e6ebe7, #2d3d33); border-color: light-dark(#dce3de, #42594b); color: light-dark(#59675f, #b2c3b8); }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
-.mode-switch { display: flex; align-self: flex-start; gap: 4px; padding: 4px; margin-bottom: 20px; background: light-dark(#e9eeea, #202f26); border: 1px solid var(--line); border-radius: 14px; }
+.mode-switch { display: flex; flex-wrap: wrap; align-self: flex-start; gap: 4px; padding: 4px; margin-bottom: 20px; background: light-dark(#e9eeea, #202f26); border: 1px solid var(--line); border-radius: 14px; }
 .mode-switch button { min-height: 38px; padding: 7px 20px; border-radius: 10px; font-size: 13px; }
 .mode-switch button[aria-pressed='false'] { background: transparent; color: var(--muted); }
 .mode-switch button[aria-pressed='true'] { background: light-dark(#ffffff, #19271f); color: var(--accent); border-color: var(--line); box-shadow: 0 2px 5px #20352c08; }

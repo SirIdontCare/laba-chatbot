@@ -1,12 +1,12 @@
 # Mój chatbot — LABA
 
-Next.js App Router z TypeScript. Czat i analiza korzystają z serwerowego `/api/agent` oraz OpenRouter i AI SDK. Historia jest przechowywana tylko w bieżącej karcie; odświeżenie strony ją usuwa.
+Next.js App Router z TypeScript. Czat i analiza korzystają z serwerowego `/api/agent` oraz OpenRouter i AI SDK. Po odświeżeniu czat wczytuje z Supabase ostatnią rozmowę bieżącej sesji. „Nowa rozmowa” czyści widok i pozostawia wcześniejszą rozmowę w bazie.
 
 `POST /api/agent` najpierw sprawdza sesję (bez niej zwraca 401), a potem tryb:
 
 | Tryb | Dane wejściowe | Wynik |
 | --- | --- | --- |
-| `chat` | `{ mode: "chat", messages: [...] }` | Strumień UI z `streamText`, maks. 18 kroków modelu. Ogólny asystent z ośmioma narzędziami opisanymi poniżej, zachowanym `aktualnyCzas`, wyszukiwaniem i obsługą obrazów. |
+| `chat` | `{ mode: "chat", chatId: "<uuid>", messages: [...] }` | Strumień UI z `streamText`, maks. 18 kroków modelu. Ogólny asystent z ośmioma narzędziami opisanymi poniżej, zachowanym `aktualnyCzas`, wyszukiwaniem i obsługą obrazów. |
 | `analyze` | `{ mode: "analyze", message: "..." }` | `{ result: ... }` z `generateText`, `Output.object` i walidacją Zod na serwerze. |
 
 Przycisk „Wygeneruj obraz” wysyła tryb `chat` z `intent: "image"` i wymusza pierwsze wywołanie `generujObraz` (opis do 500 znaków). Obraz i identyfikator modelu z API trafiają do rozmowy jako wynik narzędzia. `toModelOutput` przekazuje modelowi wyłącznie tekst „obraz wygenerowany”, również przy odtwarzaniu historii. Nie ma ponownego wysyłania pliku obrazu do modelu.
@@ -25,6 +25,8 @@ OPENROUTER_MODEL=
 ```
 
 Po pierwszym `=` wpisz swój klucz OpenRouter. Po drugim wpisz dokładny identyfikator modelu skopiowany z [listy modeli OpenRouter](https://openrouter.ai/models), w formacie `dostawca/model`. Wartości podajesz wyłącznie w lokalnym pliku, nie w rozmowie. Nie dodawaj prefiksu `NEXT_PUBLIC_`.
+
+Historia czatu wymaga adresu projektu w `SUPABASE_URL` oraz klucza serwerowego w `SUPABASE_SECRET_KEY`. Obie zmienne należą do środowiska serwera. Skrypt `supabase/create_chat_tables.sql` uzupełnia tabele `conversations` i `messages` oraz instaluje funkcję zapisu pary wiadomości. Czat zapisuje zakończone tury wraz z tekstem i dopiskami `[obraz]`. Ponowne logowanie rozpoczyna odrębną sesję.
 
 Zapisz plik. Jeśli serwer działał podczas zmiany konfiguracji, uruchom go ponownie: zakończ go przez `Ctrl+C`, a następnie wpisz w terminalu:
 
@@ -96,7 +98,7 @@ Testy używają własnych, fikcyjnych wartości w procesie testowym, bez czytani
 
 Po zalogowaniu wybierz **Analiza JSON**. Wklej jedną wiadomość klienta i kliknij **Analizuj wiadomość**. `/api/agent` w trybie `analyze` zwraca kategorię (`sales`, `support`, `billing`, `unknown`), priorytet (`normal`, `high`), szkic (`draft`) i informację o sprawdzeniu (`needs_review`). `high` jest przeznaczone wyłącznie dla blokady opłaconego spotkania rozpoczynającego się w ciągu godziny. Każdy wynik pozostaje szkicem, również przy `needs_review=false`. Aplikacja nie wysyła wiadomości, nie rezerwuje terminów ani nie wykonuje operacji płatniczych.
 
-Przełącznik **Zwykły czat** wraca do dotychczasowej rozmowy ze streamingiem. Historia czatu pozostaje w bieżącej karcie. Analiza nie korzysta z historii rozmowy; jej wynik jest usuwany po edycji wejścia, nowej próbie lub opuszczeniu trybu analizy. Przycisk **Przerwij** anuluje oczekiwanie i nie pokazuje częściowego wyniku.
+Przełącznik **Zwykły czat** wraca do dotychczasowej rozmowy ze streamingiem. Analiza nie korzysta z historii rozmowy. Jej wynik jest usuwany po edycji wejścia, nowej próbie lub opuszczeniu trybu analizy. Przycisk **Przerwij** anuluje oczekiwanie i nie pokazuje częściowego wyniku.
 
 Serwer używa AI SDK 7.0.157: `generateText` z `Output.object({ schema })` oraz Zod 4.1.8 `strictObject`. Brak pola, niewłaściwy typ, niedozwolona wartość i dodatkowe pole powodują błąd; dane nie są uzupełniane ani konwertowane. Provider OpenRouter 3.1.0 przekłada schemat na `response_format: json_schema` z `strict: true`. Analiza korzysta z tego samego `OPENROUTER_MODEL` i klucza co czat. Nie ma automatycznej zmiany modelu, naprawy wyniku, ponowienia generacji ani przejścia na zwykły JSON mode. Instrukcje i dane firmy pozostają na serwerze.
 

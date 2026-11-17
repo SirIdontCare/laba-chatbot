@@ -1,4 +1,6 @@
 export const CHAT_ERRORS = {
+  history: "Nie udało się wczytać historii rozmowy. Odśwież stronę, aby spróbować ponownie.",
+  save: "Nie udało się potwierdzić zapisu odpowiedzi w historii.",
   configuration:
     "Brak konfiguracji czatu. Uzupełnij OPENROUTER_API_KEY i OPENROUTER_MODEL w pliku .env.local, a następnie uruchom ponownie serwer.",
   invalid: "Nieprawidłowa rozmowa. Wyślij niepustą wiadomość tekstową.",

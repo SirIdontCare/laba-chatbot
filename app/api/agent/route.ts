@@ -6,12 +6,13 @@ import { agentAnalyze, analysisFailure } from "../../../lib/agent-analyze";
 
 export const maxDuration = 120;
 const chatSchema = z.strictObject({
-  mode: z.literal("chat"), messages: z.unknown(), intent: z.literal("image").optional(),
+  mode: z.literal("chat"), messages: z.unknown(), intent: z.literal("image").optional(), chatId: z.uuid().optional(),
 });
 
 export async function POST(request: Request) {
   // Wspólna bramka: przed odczytem JSON, konfiguracji i każdym modelem/narzędziem.
-  if (!(await validSession(requestToken(request)))) {
+  const token = requestToken(request);
+  if (!token || !(await validSession(token))) {
     return new Response(AUTH_MESSAGES.unauthorized, { status: 401 });
   }
   if (!sameOrigin(request)) return new Response(AUTH_MESSAGES.origin, { status: 403 });
@@ -31,7 +32,7 @@ export async function POST(request: Request) {
   if (body.mode === "chat") {
     const input = chatSchema.safeParse(body);
     if (!input.success) return new Response("Nieprawidłowe dane rozmowy.", { status: 400 });
-    return agentChat(request, input.data);
+    return agentChat(request, input.data, token);
   }
   return new Response("Wybierz tryb chat lub analyze.", { status: 400 });
 }
