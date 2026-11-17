@@ -3,6 +3,7 @@ import { cookies } from "next/headers";
 import { authConfig, sessionCookieName, validSession } from "../../lib/session";
 import { listChats } from "../../lib/chat-history";
 import LoginForm from "../login-form";
+import DeleteChatButton from "./delete-chat-button";
 
 export default async function HistoryPage() {
   const configured = Boolean(authConfig());
@@ -23,7 +24,7 @@ export default async function HistoryPage() {
     <main className="chat">
       <header className="chat-header"><h1>Historia</h1><a className="secondary-button" href="/?new=1">Nowa rozmowa</a></header>
       <Link href="/">Wróć do czatu</Link>
-      {chats.length === 0 ? <p>Nie masz jeszcze zapisanych rozmów.</p> : (
+      {chats.length === 0 ? <p>Od czego zaczynamy? Zadaj pytanie lub opisz zadanie — pomogę Ci znaleźć informacje i przejść do działania. Wybierz „Nowa rozmowa”.</p> : (
         <ul className="history-list">
           {chats.map(chat => (
             <li key={chat.chat_id}>
@@ -31,6 +32,7 @@ export default async function HistoryPage() {
                 <strong>{chat.title || "Rozmowa"}</strong>
                 <span><time dateTime={chat.created_at}>{format.format(new Date(chat.created_at))}</time> · Wiadomości {chat.messages[0]?.count ?? 0}</span>
               </Link>
+              <DeleteChatButton chatId={chat.chat_id} title={chat.title || "Rozmowa"} />
             </li>
           ))}
         </ul>
