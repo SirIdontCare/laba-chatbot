@@ -35,14 +35,16 @@ function messageContent(message: Pick<ChatMessage, "parts">) {
 }
 
 // Wywoływane przez stronę i endpoint po zweryfikowaniu podpisanego cookie.
-export async function loadLatestChat(token: string) {
+export async function loadLatestChat(token: string, chatId?: string) {
   const db = getSupabase();
-  const { data: chat, error: chatError } = await db.from("conversations")
+  let query = db.from("conversations")
     .select("id, chat_id")
     .eq("session_scope", sessionScope(token))
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
-    .limit(1)
+    .limit(1);
+  if (chatId) query = query.eq("chat_id", chatId);
+  const { data: chat, error: chatError } = await query
     .abortSignal(AbortSignal.timeout(5_000))
     .maybeSingle()
     .overrideTypes<{ id: number; chat_id: string } | null, { merge: false }>();
@@ -69,6 +71,21 @@ export async function loadLatestChat(token: string) {
       });
     }
     if (data.length < pageSize) return { id: chat.chat_id, messages };
+  }
+}
+
+export async function listChats(token: string) {
+  const rows: { chat_id: string; title: string; created_at: string; messages: { count: number }[] }[] = [];
+  const signal = AbortSignal.timeout(10_000);
+  for (let offset = 0; ; offset += 500) {
+    const { data, error } = await getSupabase().from("conversations")
+      .select("chat_id,title,created_at,messages(count)")
+      .eq("session_scope", sessionScope(token))
+      .order("created_at", { ascending: false }).order("id", { ascending: false })
+      .range(offset, offset + 499).abortSignal(signal);
+    if (error) throw new Error("Supabase history read failed.");
+    rows.push(...data);
+    if (data.length < 500) return rows;
   }
 }
 

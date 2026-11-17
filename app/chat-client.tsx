@@ -50,6 +50,9 @@ export default function ChatClient({ initialChat, historyError }: {
   historyError?: string;
 }) {
   const chatId = useRef(initialChat.id);
+  useEffect(() => {
+    window.history.replaceState(null, "", `/?chat=${initialChat.id}`);
+  }, [initialChat.id]);
   const [mode, setMode] = useState<"chat" | "analysis">("chat");
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [message, setMessage] = useState("");
@@ -136,6 +139,7 @@ export default function ChatClient({ initialChat, historyError }: {
 
   function startNewChat() {
     chatId.current = crypto.randomUUID();
+    window.history.replaceState(null, "", `/?chat=${chatId.current}`);
     setMessages([]);
     setMessage("");
     setPhoto(undefined);
@@ -182,7 +186,7 @@ export default function ChatClient({ initialChat, historyError }: {
           <div><p className="eyebrow">TWOJA PRZESTRZEŃ AI</p><h1>Mój chatbot</h1>
             <p className="header-description">Rozmawiaj, odkrywaj i twórz z pomocą AI.</p></div>
         </div>
-        <div className="header-actions"><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
+        <div className="header-actions"><Link href="/history">Historia</Link><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
         <button className="secondary-button" type="button" onClick={logout} disabled={leaving}>
           {leaving ? "Wychodzę…" : "Wyjdź"}
         </button></div>

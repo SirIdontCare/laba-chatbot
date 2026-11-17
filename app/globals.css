@@ -146,3 +146,4 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .dashboard--compare .travel-grid { grid-template-columns: 1fr; }
 .destination-column > h2 { min-height: 64px; font-size: 20px; }
 @media (max-width: 650px) { .dashboard--compare .destination-columns { grid-template-columns: 1fr; } }
+.history-list { list-style: none; padding: 0; display: grid; gap: 10px; } .history-list a { display: grid; gap: 8px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; text-decoration: none; overflow-wrap: anywhere; } .history-list a:hover { background: var(--accent-soft); } .history-list span { font-size: 13px; color: var(--muted); } .header-actions { flex-wrap: wrap; }
