@@ -43,10 +43,10 @@ export default function AnalysisPanel({ leaving, onBusyChange }: {
 
     try {
       const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(75_000)]);
-      const response = await fetch("/api/analyze", {
+      const response = await fetch("/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text }),
+        body: JSON.stringify({ mode: "analyze", message: text }),
         signal,
       });
       if (response.status === 401) {

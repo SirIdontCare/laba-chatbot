@@ -4,4 +4,5 @@ export const CHAT_ERRORS = {
   invalid: "Nieprawidłowa rozmowa. Wyślij niepustą wiadomość tekstową.",
   unavailable:
     "Nie udało się uzyskać odpowiedzi AI. Sprawdź połączenie, klucz, identyfikator modelu i dostępne środki w OpenRouter, a następnie spróbuj ponownie.",
+  visionUnavailable: "Nie udało się przeanalizować zdjęcia. Model może być niedostępny lub nie obsługiwać obrazów. Spróbuj ponownie albo sprawdź model czatu w OpenRouter.",
 } as const;

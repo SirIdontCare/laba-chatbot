@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from "react";
 import { AUTH_MESSAGES } from "../lib/auth-messages";
+import ThemeToggle from "./theme-toggle";
 
 export default function LoginForm({ configured }: { configured: boolean }) {
   const [password, setPassword] = useState("");
@@ -33,7 +34,12 @@ export default function LoginForm({ configured }: { configured: boolean }) {
 
   return (
     <main className="chat login">
-      <h1>Wpisz hasło</h1>
+      <header className="login-header"><span className="brand-mark" aria-hidden="true">✳</span><ThemeToggle /></header>
+      <p className="eyebrow">TWOJA PRZESTRZEŃ AI</p>
+      <h1>Mój chatbot</h1>
+      <p className="login-description">Rozmawiaj, odkrywaj i twórz z pomocą AI.</p>
+      <h2>Witaj z powrotem</h2>
+      <p className="login-description">Wpisz hasło warsztatowe, aby rozpocząć.</p>
       {!configured && <p className="error" role="alert">{AUTH_MESSAGES.configuration}</p>}
       <form onSubmit={login}>
         <label htmlFor="password">Hasło warsztatowe</label>

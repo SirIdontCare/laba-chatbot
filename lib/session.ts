@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
 import { NextRequest, NextResponse } from "next/server";
 
@@ -23,6 +23,7 @@ export function passwordMatches(candidate: string, expected: string) {
 
 export async function createSession(config: NonNullable<ReturnType<typeof authConfig>>) {
   return new SignJWT({})
+    .setJti(randomUUID())
     .setProtectedHeader({ alg: "HS256" })
     .setSubject("workshop")
     .setIssuer("laba-chatbot")

@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit",
     "test:auth": "node --conditions=react-server --test tests/auth.test.cjs",
     "test:analysis": "node --conditions=react-server --test tests/analysis.test.cjs",
+    "test:agent": "node --conditions=react-server --test tests/auth.test.cjs tests/analysis.test.cjs tests/chat-search.test.cjs tests/images.test.cjs tests/agent-image.test.cjs tests/tools.test.cjs",
     "session:secret": "node scripts/generate-session-secret.cjs"
   },
   "dependencies": {

@@ -22,14 +22,14 @@ process.env.OPENROUTER_MODEL = "";
 
 const { POST: login } = require("../app/api/auth/login/route.ts");
 const { POST: logout } = require("../app/api/auth/logout/route.ts");
-const { POST: chat } = require("../app/api/chat/route.ts");
+const { POST: chat } = require("../app/api/agent/route.ts");
 const { authConfig, validSession, sameOrigin, SESSION_SECONDS } = require("../lib/session.ts");
 const { NextRequest } = require("next/server");
 const { SignJWT } = require("jose");
 const origin = "http://localhost:3000";
 const makeRequest = (path, body, cookie = "", source = origin) => new Request(origin + path, {
   method: "POST", headers: { origin: source, "content-type": "application/json", cookie },
-  body: JSON.stringify(body),
+  body: JSON.stringify(path === "/api/agent" ? { ...body, mode: "chat" } : body),
 });
 const chatBody = { messages: [{ id: "test", role: "user", parts: [{ type: "text", text: "Test" }] }] };
 let cookie;
@@ -40,7 +40,7 @@ test("ochrona czatu bez platnych wywolan", async (t) => {
   await t.test("brak i niepelna konfiguracja blokuja dostep", async () => {
     process.env.CHAT_PASSWORD = "";
     assert.equal((await login(makeRequest("/api/auth/login", { password: "test" }))).status, 503);
-    assert.equal((await chat(makeRequest("/api/chat", chatBody))).status, 401);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody))).status, 401);
     process.env.CHAT_PASSWORD = "test-workshop-password";
     process.env.SESSION_SECRET = "short";
     assert.equal((await login(makeRequest("/api/auth/login", { password: "test-workshop-password" }))).status, 503);
@@ -66,15 +66,16 @@ test("ochrona czatu bez platnych wywolan", async (t) => {
     assert.equal(await validSession(token), true);
     const payload = JSON.parse(Buffer.from(token.split(".")[1], "base64url"));
     assert.equal(payload.exp - payload.iat, SESSION_SECONDS);
-    assert.deepEqual(Object.keys(payload).sort(), ["aud", "exp", "iat", "iss", "sub"]);
+    assert.deepEqual(Object.keys(payload).sort(), ["aud", "exp", "iat", "iss", "jti", "sub"]);
+    assert.match(payload.jti, /^[0-9a-f-]{36}$/);
     assert.equal(JSON.stringify(payload).includes("test-workshop-password"), false);
   });
 
   await t.test("brak lub podrobione cookie daje 401 przed OpenRouter", async () => {
-    assert.equal((await chat(makeRequest("/api/chat", chatBody))).status, 401);
-    assert.equal((await chat(makeRequest("/api/chat", chatBody, "workshop-session=forged"))).status, 401);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody))).status, 401);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody, "workshop-session=forged"))).status, 401);
     // Prawdziwa sesja przechodzi autoryzację, potem trafia na brak konfiguracji AI.
-    assert.equal((await chat(makeRequest("/api/chat", chatBody, cookie))).status, 503);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody, cookie))).status, 503);
   });
 
   await t.test("wygasla sesja i zmiana hasla sa odrzucane", async () => {
@@ -82,9 +83,9 @@ test("ochrona czatu bez platnych wywolan", async (t) => {
       .setSubject("workshop").setIssuer("laba-chatbot").setAudience("workshop-chat")
       .setIssuedAt(Math.floor(Date.now() / 1000) - 100).setExpirationTime(Math.floor(Date.now() / 1000) - 1)
       .sign(authConfig().key);
-    assert.equal((await chat(makeRequest("/api/chat", chatBody, "workshop-session=" + expired))).status, 401);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody, "workshop-session=" + expired))).status, 401);
     process.env.CHAT_PASSWORD = "changed-password";
-    assert.equal((await chat(makeRequest("/api/chat", chatBody, cookie))).status, 401);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody, cookie))).status, 401);
     process.env.CHAT_PASSWORD = "test-workshop-password";
   });
 
@@ -94,13 +95,13 @@ test("ochrona czatu bez platnych wywolan", async (t) => {
     const deleted = response.headers.get("set-cookie");
     assert.match(deleted, /^workshop-session=;/);
     assert.match(deleted, /Max-Age=0/i);
-    assert.equal((await chat(makeRequest("/api/chat", chatBody, deleted.split(";")[0]))).status, 401);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody, deleted.split(";")[0]))).status, 401);
   });
 
   await t.test("zadania z obcej strony sa odrzucane", async () => {
     assert.equal((await login(makeRequest("/api/auth/login", { password: "test-workshop-password" }, "", "https://other.test"))).status, 403);
     assert.equal((await logout(makeRequest("/api/auth/logout", {}, cookie, "https://other.test"))).status, 403);
-    assert.equal((await chat(makeRequest("/api/chat", chatBody, cookie, "https://other.test"))).status, 403);
+    assert.equal((await chat(makeRequest("/api/agent", chatBody, cookie, "https://other.test"))).status, 403);
   });
 
   await t.test("NextRequest normalizuje 127.0.0.1; kontrola uzywa rzeczywistego Host", async () => {

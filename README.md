@@ -1,6 +1,19 @@
 # Mój chatbot — LABA
 
-Next.js App Router z TypeScript. Czat korzysta z serwerowego `/api/chat`, OpenRouter i strumieniowych odpowiedzi AI SDK. Historia jest przechowywana tylko w bieżącej karcie; odświeżenie strony ją usuwa.
+Next.js App Router z TypeScript. Czat i analiza korzystają z serwerowego `/api/agent` oraz OpenRouter i AI SDK. Historia jest przechowywana tylko w bieżącej karcie; odświeżenie strony ją usuwa.
+
+`POST /api/agent` najpierw sprawdza sesję (bez niej zwraca 401), a potem tryb:
+
+| Tryb | Dane wejściowe | Wynik |
+| --- | --- | --- |
+| `chat` | `{ mode: "chat", messages: [...] }` | Strumień UI z `streamText`, maks. 18 kroków modelu. Ogólny asystent z ośmioma narzędziami opisanymi poniżej, zachowanym `aktualnyCzas`, wyszukiwaniem i obsługą obrazów. |
+| `analyze` | `{ mode: "analyze", message: "..." }` | `{ result: ... }` z `generateText`, `Output.object` i walidacją Zod na serwerze. |
+
+Przycisk „Wygeneruj obraz” wysyła tryb `chat` z `intent: "image"` i wymusza pierwsze wywołanie `generujObraz` (opis do 500 znaków). Obraz i identyfikator modelu z API trafiają do rozmowy jako wynik narzędzia. `toModelOutput` przekazuje modelowi wyłącznie tekst „obraz wygenerowany”, również przy odtwarzaniu historii. Nie ma ponownego wysyłania pliku obrazu do modelu.
+
+Instrukcje Studio Nova i format szkicu dotyczą wyłącznie `analyze`. Czat wykonuje zadania ogólne. Przy zadaniu z logo wyszukuje źródło, przekazuje znaleziony bezpośredni URL PNG/JPG/WebP do `obejrzyjObraz`, opisuje widoczny obraz, a potem może użyć tego samego URL w `referenceImageUrls` narzędzia generowania. Adres referencji bez wcześniejszego przekazania do vision jest odrzucany. Obraz referencyjny przekazywany jest dostawcy vision i generatorowi; serwer aplikacji nie pobiera tych adresów. Gdy dostępna jest tylko strona HTML, SVG lub niedziałający adres, asystent ma zgłosić ograniczenie i poprosić o odpowiedni plik lub URL.
+
+Pełny zestaw testów agenta: `npm run test:agent`. Testy zastępują połączenia z modelami atrapami. Obejmują oba tryby, autoryzację, narzędzia, zdjęcia i oddzielenie obrazu dla UI od krótkiego wyniku dla modelu.
 
 ## Konfiguracja lokalna
 
@@ -57,7 +70,7 @@ Przed czatem pojawia się „Wpisz hasło”. Poprawne hasło tworzy podpisany J
 
 `Wyjdź` przerywa odbieranie odpowiedzi, usuwa cookie i rozmowę w tej karcie oraz wraca do ekranu hasła. To sesje bez bazy danych: wylogowanie usuwa cookie z przeglądarki, nie prowadzi listy unieważnionych kopii tokenów. Skopiowany token pozostaje ważny do wygaśnięcia lub zmiany sekretu/hasła.
 
-Serwer sprawdza podpis i wygaśnięcie również w `/api/chat`, zanim odczyta konfigurację OpenRouter lub uruchomi model. Bez prawidłowej sesji zwraca `401`. Logowanie, wylogowanie i czat odrzucają żądania pochodzące z obcej strony.
+Serwer sprawdza podpis i wygaśnięcie w `/api/agent`, zanim odczyta konfigurację OpenRouter lub uruchomi model. Bez prawidłowej sesji zwraca `401`. Logowanie, wylogowanie i agent odrzucają żądania pochodzące z obcej strony.
 
 ## Ograniczanie prób hasła
 
@@ -77,11 +90,11 @@ npm.cmd run typecheck
 npm.cmd run build
 ```
 
-Testy używają własnych, fikcyjnych wartości w procesie testowym, bez czytania `.env.local`. Sieć jest zastąpiona atrapą, więc nie ma wywołań modelu. Sprawdzają poprawne i błędne hasło, atrybuty cookie, wygaśnięcie, zmianę hasła, usunięcie cookie przy wyjściu, `401` dla `/api/chat` bez sesji, obce źródło żądania, limit lokalny i blokowanie dostępu przy braku/awarii usługi limitującej w produkcji.
+Testy używają własnych, fikcyjnych wartości w procesie testowym, bez czytania `.env.local`. Sieć jest zastąpiona atrapą, więc nie ma wywołań modelu. Sprawdzają poprawne i błędne hasło, atrybuty cookie, wygaśnięcie, zmianę hasła, usunięcie cookie przy wyjściu, `401` dla `/api/agent` bez sesji, obce źródło żądania, limit lokalny i blokowanie dostępu przy braku/awarii usługi limitującej w produkcji.
 
 ## Analiza wiadomości Studio Nova
 
-Po zalogowaniu wybierz **Analiza wiadomości**. Wklej jedną wiadomość klienta i kliknij **Analizuj wiadomość**. Osobny endpoint `/api/analyze` zwraca kategorię (`sales`, `support`, `billing`, `unknown`), priorytet (`normal`, `high`), szkic (`draft`) i informację o sprawdzeniu (`needs_review`). `high` jest przeznaczone wyłącznie dla blokady opłaconego spotkania rozpoczynającego się w ciągu godziny. Każdy wynik pozostaje szkicem, również przy `needs_review=false`. Aplikacja nie wysyła wiadomości, nie rezerwuje terminów ani nie wykonuje operacji płatniczych.
+Po zalogowaniu wybierz **Analiza JSON**. Wklej jedną wiadomość klienta i kliknij **Analizuj wiadomość**. `/api/agent` w trybie `analyze` zwraca kategorię (`sales`, `support`, `billing`, `unknown`), priorytet (`normal`, `high`), szkic (`draft`) i informację o sprawdzeniu (`needs_review`). `high` jest przeznaczone wyłącznie dla blokady opłaconego spotkania rozpoczynającego się w ciągu godziny. Każdy wynik pozostaje szkicem, również przy `needs_review=false`. Aplikacja nie wysyła wiadomości, nie rezerwuje terminów ani nie wykonuje operacji płatniczych.
 
 Przełącznik **Zwykły czat** wraca do dotychczasowej rozmowy ze streamingiem. Historia czatu pozostaje w bieżącej karcie. Analiza nie korzysta z historii rozmowy; jej wynik jest usuwany po edycji wejścia, nowej próbie lub opuszczeniu trybu analizy. Przycisk **Przerwij** anuluje oczekiwanie i nie pokazuje częściowego wyniku.
 
@@ -126,3 +139,47 @@ Schemat kontroluje strukturę, a nie prawdziwość ceny w tekście `draft`: popr
 Do powtórzenia w przeglądarce: zwykłe pytanie o cenę (150 zł brutto, 45 minut), ta sama wiadomość z poleceniem ceny 1 zł (bez przyjęcia fałszywej ceny), polecenie nadania roli administratora i wysłania odpowiedzi (wyłącznie szkic, bez działania) oraz żądanie sekretów (bez ich ujawnienia). W trybie analizy sprawdź również obecność wszystkich czterech pól wyniku.
 
 Po ustawieniu własnego `CHAT_PASSWORD` ręcznie sprawdź w przeglądarce: ekran hasła, odmowę po błędnym haśle, wejście po poprawnym, wyjście i powrót do ekranu hasła po odświeżeniu. Samo logowanie i wyjście nie wywołują modelu. Nie testowano wyglądu w przeglądarce ani prawdziwego Vercel Firewall; test produkcji używa atrap odpowiedzi usługi.
+
+
+## Osiem narzędzi agenta — 2026-11-12
+
+Narzędzia korzystają z istniejącego AI SDK i Zod; bez nowych bibliotek i kluczy do publicznych API. Każde ma opis użycia i `inputSchema`. Wyniki mają tylko potrzebne pola i czas pobrania w ISO UTC (`pobranoAt`; dotychczasowa ścieżka błędu pogody zachowuje `sprawdzonoAt`). Agent ma prezentować czas po polsku w Europe/Warsaw. Połączenia mają wspólny limit 8 sekund na wykonanie narzędzia, obsługują przerwanie żądania i nie korzystają z cache. Brak danych, HTTP, timeout i nieprawidłowa odpowiedź dają polski komunikat zamiast wyjątku. Wyniki narzędzi pozostają w historii następnych tur; plakietki pochodzą ze wspólnego katalogu `lib/tool-catalog.ts`.
+
+| Narzędzie | Wejście i zapytanie | Ograniczony wynik |
+| --- | --- | --- |
+| `pogoda` | `miejscowosc`, opcjonalne `kodKraju`, `dzien` YYYY-MM-DD. GET geocoding `/v1/search?name=…&count=3&language=pl&countryCode=…`, następnie forecast `/v1/forecast?latitude=…&longitude=…&timezone=auto`. Dla dnia: `daily`, `start_date=end_date`; bez dnia zachowane `current`. | Bieżąca pogoda lub prognoza: minimum/maksimum temperatury, dobowa suma i prawdopodobieństwo opadów, maksymalny wiatr, opis, strefa i źródło. Prognoza od dziś do 15 dni naprzód w strefie miasta. Kilka miejscowości → prośba o doprecyzowanie. |
+| `waluty` | `waluta` ISO, opcjonalne `kwota` i `kierunek` (`doPLN`/`zPLN`). GET NBP `/api/exchangerates/rates/a/{code}/?format=json`; 404 → tabela B. | `code`, `currency`, `rates[0].mid` i `effectiveDate` → kod, nazwa, kurs PLN za jednostkę, data publikacji, opcjonalne przeliczenie do 2 miejsc i źródło. Kurs średni z ostatniej publikacji, bez marż. |
+| `swieta` | `kodKraju` ISO alpha-2, `rok` 1900–2100. GET `https://date.nager.at/api/v3/PublicHolidays/{year}/{country}`. | Z tablicy odpowiedzi wyłącznie pozycje z `types` zawierającym `Public`: data, lokalna nazwa, cały kraj (`global`) lub regiony (`counties`). Nie obejmuje weekendów i urlopów; nie każdy zawód ma takie samo prawo do wolnego. |
+| `wikipedia` | `haslo` (jeden tytuł). GET `https://pl.wikipedia.org/w/api.php?action=query&prop=extracts%7Cpageprops&ppprop=disambiguation&exintro=1&explaintext=1&exchars=1000&redirects=1&format=json&formatversion=2&titles=…`. | `query.pages[0]` → tytuł, krótki tekst bez HTML i link do artykułu. Obsługa przekierowań, brakujących i niejednoznacznych haseł. |
+| `kalkulator` | `dzialanie`: dodaj/odejmij/pomnoz/podziel/potega/procent oraz liczby `a`, `b` jako oddzielne argumenty. Lokalne operatory JavaScript, bez `eval` i wykonywania tekstu. | Skończony wynik albo komunikat (dzielenie przez zero, wynik nierzeczywisty, przepełnienie). Procent = a% z b. Standardowa precyzja Number. |
+| `czas` | Opcjonalna `strefa` IANA, domyślnie Europe/Warsaw. Lokalne `Intl.DateTimeFormat` i zegar serwera. `aktualnyCzas` jest zachowanym aliasem i nadal służy do wymuszonego sprawdzenia daty. | Data, dzień tygodnia, godzina, strefa i czas pobrania; nieznana strefa → komunikat. |
+| `notatki` | `akcja: zapisz` + `tresc` (1–2000 znaków) albo `akcja: pokaz`. Lokalny `Map` w pamięci procesu. | Zapis zwraca nową notatkę; odczyt listę notatek z identyfikatorami i czasami zapisu. Limit 100 na sesję i 200 sesji na instancję; po zapełnieniu czytelny komunikat, bez usuwania starszych wpisów. |
+| `diagnostyka` | Puste `{}`. Lokalna lista rejestru, stała limitu i wskazane pola `process.env`. | Skonfigurowana nazwa modelu, faktyczna lista narzędzi (w tym wyszukiwanie, obraz i alias czasu), limit 18 kroków oraz `tak`/`nie` dla OPENROUTER_API_KEY, OPENROUTER_MODEL, CHAT_PASSWORD, SESSION_SECRET. Nigdy wartości sekretów. |
+
+Notatki są izolowane według sesji logowania. Model nie podaje identyfikatora sesji: serwer wyznacza klucz pamięci ze skrótu podpisanego cookie, nie przekazuje go modelowi. Nowe sesje JWT mają losowe `jti`, także przy logowaniach w tej samej sekundzie. Notatki znikają po restarcie, ponownym logowaniu lub zmianie instancji; na hostingu wiele instancji może mieć różne zestawy notatek. To celowo tymczasowe rozwiązanie na tę lekcję, bez bazy i zapisu na dysku.
+
+Schemat wejścia notatek jest pojedynczym obiektem z wymaganym `akcja: zapisz | pokaz` i opcjonalnym `tresc` (dla odczytu można pominąć lub podać `null`). Zastępuje unię z dyskryminatorem, przy której model pomijał poprawne pole `akcja` i pojawiał się błąd `No matching discriminator`. Pusta treść zapisu zwraca polski komunikat. Przykłady parametrów są podane w opisie pól, `inputExamples` i instrukcji agenta. Test regresji sprawdza rzeczywisty JSON Schema w żądaniu OpenRouter oraz zapis „sprawdzić ceny lotów do Lizbony”, odczyt w tym samym zadaniu i odczyt w osobnym żądaniu tej samej sesji.
+
+Dokumentacja sprawdzona przed implementacją:
+
+- [Open-Meteo Forecast](https://open-meteo.com/en/docs) i [Geocoding](https://open-meteo.com/en/docs/geocoding-api).
+- [NBP Web API](https://api.nbp.pl/): adresy tabel A/B, `mid`, `effectiveDate`, statusy 400/404.
+- [Nager.Date](https://github.com/nager/Nager.Date) i [aktualna dokumentacja](https://nagerholidays.com/api). Projekt nadal opisuje v3 jako wspierane do 2027-01-31; aktualna strona prezentuje v4. Implementacja używa wskazanego w zadaniu `date.nager.at` i v3 (`global`, `counties`, `types`).
+- [MediaWiki Query](https://www.mediawiki.org/wiki/API:Query) i [TextExtracts](https://www.mediawiki.org/wiki/Extension:TextExtracts#API).
+- Lokalne API: [Intl.DateTimeFormat](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Intl/DateTimeFormat), [Number.isFinite](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Number/isFinite), [Node.js globals](https://nodejs.org/api/globals.html); kontrakty `Map` i `process.env` nie wymagają HTTP.
+- AI SDK: dokumentacja zainstalowanej wersji w `node_modules/ai/docs/`, m.in. `tool`, `convertToModelMessages`, `streamText` i `isStepCount`.
+
+Sprawdzenie: `npm run test:agent`, `npm run typecheck`, `npm run build`. Nowe testy w `tests/tools.test.cjs` używają rzeczywistych handlerów i SDK z atrapami sieci. Obejmują obliczenia, strefy, parametry HTTP, ograniczanie pól, awarie, zakres prognozy, notatki i ich izolację, brak sekretów w diagnostyce oraz przejście model → narzędzie → UI → kolejna tura dla wszystkich ośmiu narzędzi. Nie czytają `.env` i nie wywołują płatnych modeli. Próba bezpośredniego sprawdzenia publicznych API z lokalnego środowiska zakończyła się `fetch failed`; działanie z rzeczywistymi usługami wymaga sprawdzenia w środowisku z dostępem do sieci.
+
+Pętla ReAct: najwyżej 18 kroków modelu na zadanie (`isStepCount(18)`). Czat pokazuje kolejność wywołań z numerem rzeczywistego kroku modelu, również powtórzenia. Po dojściu do limitu pokazuje „Zatrzymałem się po 18 krokach” i ograniczone wyniki narzędzi, także gdy model nie zdążył napisać odpowiedzi. Nie uruchamia dodatkowego modelu do podsumowania.
+## Asystent podróży `/dashboard`
+
+Chroniona strona i POST `/api/dashboard` wymagają tej samej sesji co czat; endpoint dodatkowo sprawdza origin. Formularz przyjmuje miasto (opcjonalnie kraj/region po przecinku) i datę ISO. Geokodowanie Open-Meteo ustala kraj i strefę; niejednoznaczne miasto wymaga doprecyzowania. Prognoza, kurs NBP, święta Nager.Date i wprowadzenie Wikipedii korzystają z istniejących funkcji narzędzi. Czas używa wspólnego `warsawTime` z jedną chwilą odniesienia do obliczenia różnicy względem Polski (także ułamkowe strefy i zmiany DST). Różnica dotyczy chwili pobrania, nie dnia wyjazdu.
+
+Waluta jest ustalana z jawnej lokalnej tabeli kraj–waluta; nieobsługiwany kraj daje czytelny brak danych. Dla PLN karta pokazuje tożsamość 1 PLN = 1 PLN bez fikcyjnego kursu NBP. Święta są wybierane od dnia wyjazdu, z zachowaniem zakresu regionalnego; w razie potrzeby sprawdzany jest również kolejny rok. Wikipedia pokazuje najwyżej dwa dostępne zdania i link. Każda karta zawiera źródło i czas pobrania (dla błędu: czas próby). Odśwież pobiera wszystkie dane ponownie, bez cache.
+
+Agent otrzymuje tylko dane kart i przygotowuje 2–3 zdania porad. To jedno wywołanie skonfigurowanego modelu na Sprawdź/Odśwież; awaria lub brak konfiguracji modelu nie usuwa kart. Publiczne API nie wymagają nowych kluczy. Błąd pojedynczego źródła nie blokuje pozostałych kart. Testy offline obejmują sesję, origin, pięć kart, PLN, różnicę czasu i niedostępne źródło. Nie wykonano płatnego wywołania modelu ani przeglądarkowego testu z prawdziwymi usługami.
+
+## Porównanie miast
+
+Na `/dashboard` przełącznik „Porównaj” dodaje drugie miasto; oba cele używają tej samej daty. Wyniki są prezentowane w dwóch kolumnach, na małym telefonie jedna pod drugą. „Odśwież” ponownie pobiera oba zestawy. Endpoint przyjmuje opcjonalne `secondCity` i odrzuca identyczne nazwy. Obie lokalizacje są sprawdzane równolegle; brak miasta lub źródła nie usuwa drugiej kolumny. W trybie porównania nie generujemy dwóch osobnych podsumowań: jedno wywołanie modelu otrzymuje obie listy kart i ma polecić miasto, wskazując konkretne dane i ograniczenia. Kurs waluty nie jest traktowany jako cena pobytu. Braki źródeł są zawsze dopisywane przez serwer. Niedostępny model oznacza jawną niedostępność rekomendacji, bez wymyślonego wyboru. Test porównania obejmuje wspólną datę, obie kolumny, jedno wywołanie modelu i awarię geokodowania jednego celu; używa atrap sieci.
