@@ -28,10 +28,10 @@ export default async function HistoryPage() {
         <ul className="history-list">
           {chats.map(chat => (
             <li key={chat.chat_id}>
-              <Link href={`/?chat=${chat.chat_id}`}>
+              <a href={`/?chat=${chat.chat_id}`}>
                 <strong>{chat.title || "Rozmowa"}</strong>
                 <span><time dateTime={chat.created_at}>{format.format(new Date(chat.created_at))}</time> · Wiadomości {chat.messages[0]?.count ?? 0}</span>
-              </Link>
+              </a>
               <DeleteChatButton chatId={chat.chat_id} title={chat.title || "Rozmowa"} />
             </li>
           ))}

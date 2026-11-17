@@ -186,7 +186,7 @@ export default function ChatClient({ initialChat, historyError }: {
           <div><p className="eyebrow">TWOJA PRZESTRZEŃ AI</p><h1>Mój chatbot</h1>
             <p className="header-description">Rozmawiaj, odkrywaj i twórz z pomocą AI.</p></div>
         </div>
-        <div className="header-actions"><Link href="/history">Historia</Link><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
+        <div className="header-actions"><a href="/history">Historia</a><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
         <button className="secondary-button" type="button" onClick={logout} disabled={leaving}>
           {leaving ? "Wychodzę…" : "Wyjdź"}
         </button></div>

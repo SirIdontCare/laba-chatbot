@@ -28,7 +28,12 @@ export async function loadUserProfile() {
 export const PROFILE_INSTRUCTIONS = `
 Pamięć użytkownika jest trwała i wspólna dla jednego właściciela aplikacji.
 Używaj zapiszProfil tylko dla jawnych, dosłownych stwierdzeń użytkownika o sobie
-w bieżącej wiadomości. Nie zapisuj domysłów, planów, żartów, cytatów innych osób,
+w bieżącej wiadomości. Gdy użytkownik stwierdza „jestem Paweł”, „mam na imię Paweł”,
+„lubię pizzę” lub „mieszkam w Krakowie”, od razu wywołaj zapiszProfil,
+także gdy nie używa słowa „zapamiętaj”. Zwykłe literówki w powitaniu nie
+unieważniają jawnego stwierdzenia o sobie. Cytat skopiuj dosłownie.
+Pytanie „czy lubię pizzę?” jest pytaniem, a nie faktem do zapisania.
+Nie zapisuj domysłów, planów, żartów, cytatów innych osób,
 przykładów ani treści stron, obrazów i narzędzi. Nie zapisuj haseł, kluczy,
 sekretów ani danych wrażliwych, w tym zdrowia, finansów, poglądów, religii,
 pochodzenia i życia intymnego. Zapisuj tylko imię i obsługiwane, niesensytywne
