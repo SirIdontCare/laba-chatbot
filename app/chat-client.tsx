@@ -12,6 +12,8 @@ import { TOOL_LABELS } from "../lib/tool-catalog";
 import { conversationForModel, markInterrupted, type ChatMessage } from "../lib/chat-message";
 import { IMAGE_MESSAGES, isPhotoType, photoSelectionError } from "../lib/image-input";
 import { imageToolInputSchema, imageToolOutputSchema, inspectionOutputSchema } from "../lib/image-tool-schema";
+import { usedKnowledgeFragments } from "../lib/knowledge-schema";
+import KnowledgeSources from "./knowledge-sources";
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/agent",
@@ -212,6 +214,10 @@ export default function ChatClient({ initialChat, historyError, profileName }: {
                   .filter((part, index, all) => safeSourceUrl(part.url) &&
                     all.findIndex((source) => source.url === part.url) === index)
                 : [];
+              const knowledgeFragments = item.role === "assistant" ? usedKnowledgeFragments(
+                item.parts.flatMap((part) => part.type === "tool-searchKnowledge" && part.state === "output-available" ? [part.output] : []),
+                item.parts.map((part) => part.type === "text" ? part.text : "").join(""),
+              ) : [];
               const usedTools = Object.entries(TOOL_LABELS).filter(([name]) =>
                 item.role === "assistant" && ((name === "web_search" && sources.length > 0) ||
                   item.parts.some((part) => part.type === `tool-${name}` &&
@@ -279,6 +285,7 @@ export default function ChatClient({ initialChat, historyError, profileName }: {
                   );
                   return null;
                 })}
+                <KnowledgeSources fragments={knowledgeFragments} />
                 {item.metadata?.stats && <small className="model-id">Kroki: {item.metadata.stats.steps} · Wywołania narzędzi: {item.metadata.stats.toolCalls} · Czas: {(item.metadata.stats.elapsedMs / 1000).toFixed(1)} s</small>}
                 {sources.length > 0 && (
                   <section className="sources" aria-label="Źródła">

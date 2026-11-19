@@ -50,6 +50,13 @@ button:disabled:hover { background: light-dark(#e6ebe7, #2d3d33); border-color: 
 .sources li { min-width: 0; max-width: 100%; }
 .sources a { display: block; padding: 4px 10px; border: 1px solid light-dark(#c9ddd1, #4d6d59); border-radius: 999px; background: light-dark(#ffffff, #19271f); text-decoration: none; overflow-wrap: anywhere; }
 .sources p { margin: 9px 0 0; font-size: 11px; color: var(--muted); }
+.kb-sources ul { flex-direction: column; flex-wrap: nowrap; }
+.kb-source { padding: 6px 10px; border: 1px solid light-dark(#c9ddd1, #4d6d59); border-radius: 10px; background: light-dark(#ffffff, #19271f); }
+.kb-source-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.kb-source-title { font-weight: 600; overflow-wrap: anywhere; }
+.kb-source-score { color: var(--muted); font-variant-numeric: tabular-nums; }
+.kb-source-toggle { margin-left: auto; padding: 2px 9px; border: 1px solid light-dark(#c9ddd1, #4d6d59); border-radius: 999px; background: transparent; color: var(--accent); font: inherit; font-size: 11px; cursor: pointer; }
+.kb-source-text { margin: 8px 0 2px; padding: 6px 10px; border-left: 3px solid light-dark(#9cc3ae, #5f8a72); white-space: pre-wrap; color: inherit; }
 .status { color: var(--muted); font-size: 13px; }
 p.status[role='status'] { display: flex; align-items: center; gap: 9px; margin: 12px 0; color: var(--accent); font-weight: 600; }
 p.status[role='status']::before { content: ''; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); animation: pulse 1.4s ease-in-out infinite; flex-shrink: 0; }

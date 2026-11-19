@@ -12,6 +12,7 @@ Object.assign(process.env, { NODE_ENV: 'development',
   OPENROUTER_API_KEY: 'fake-openrouter-key', OPENROUTER_EMBEDDING_MODEL: 'test/embedding-model',
   SUPABASE_URL: 'http://supabase.test', SUPABASE_SECRET_KEY: 'fake-supabase-key' });
 const { searchKnowledgeBase, KB_MATCH_COUNT } = require('../lib/knowledge-search.ts');
+const { KB_MIN_SIMILARITY, citedTitles, usedKnowledgeFragments } = require('../lib/knowledge-schema.ts');
 const { createAgentTools } = require('../lib/agent-tools.ts');
 const { TOOL_LABELS } = require('../lib/tool-catalog.ts');
 const { AGENT_CHAT_INSTRUCTIONS } = require('../lib/studio-nova.ts');
@@ -40,17 +41,39 @@ beforeEach(() => {
   };
 });
 
-test('searchKnowledge: embedding pytania → match_chunks → 3 najlepsze fragmenty z tytułem, treścią i podobieństwem', async () => {
+test('searchKnowledge: embedding pytania → match_chunks → do 3 najlepszych fragmentów powyżej progu', async () => {
   const result = await searchKnowledgeBase({ pytanie: 'ile kosztuje pakiet start?' });
   assert.equal(KB_MATCH_COUNT, 3);
+  assert.equal(KB_MIN_SIMILARITY, 0.45);
   assert.equal(rpcBody.match_count, 3);
   assert.equal(rpcBody.query_embedding.length, EMBEDDING_DIMENSIONS);
   assert.equal(result.ok, true);
   assert.deepEqual(result.fragmenty, [
     { tytul: 'Cennik 2026', tresc: 'Pakiet Start kosztuje 490 zł netto miesięcznie.', podobienstwo: 0.71 },
     { tytul: 'Regulamin', tresc: 'Okres próbny trwa 14 dni.', podobienstwo: 0.5 },
-    { tytul: 'FAQ', tresc: 'Nie na temat.', podobienstwo: 0.1 },
   ]);
+});
+
+test('searchKnowledge: same fragmenty poniżej progu = brak źródeł i komunikat', async () => {
+  rpcReply = () => Response.json([{ id: 9, document_id: 2, title: 'FAQ', content: 'Pogoda.', similarity: 0.32 }]);
+  const result = await searchKnowledgeBase({ pytanie: 'pogoda w Krakowie' });
+  assert.deepEqual(result.fragmenty, []);
+  assert.match(result.komunikat, /wystarczająco podobnych/);
+});
+
+test('źródła pod odpowiedzią: tylko fragmenty z dokumentów z linii 📎 Źródło, bez podobnych tytułów', () => {
+  assert.deepEqual([...citedTitles('Tekst.\n📎 Źródło: [Cennik 2026 v2]')], ['Cennik 2026 v2']);
+  assert.ok(citedTitles('📎 Źródła: Cennik 2026, FAQ').has('FAQ'));
+  const output = { ok: true, pobranoAt: new Date().toISOString(), fragmenty: [
+    { tytul: 'Cennik 2026', tresc: 'Start 490 zł.', podobienstwo: 0.63 },
+    { tytul: 'Cennik 2026 v2', tresc: 'Start 540 zł.', podobienstwo: 0.62 },
+    { tytul: 'FAQ', tresc: 'Okres próbny 14 dni.', podobienstwo: 0.6 },
+  ] };
+  assert.deepEqual(usedKnowledgeFragments([output, output], 'Start kosztuje 540 zł.\n📎 Źródło: Cennik 2026 v2'),
+    [{ tytul: 'Cennik 2026 v2', tresc: 'Start 540 zł.', podobienstwo: 0.62 }]);
+  assert.deepEqual(usedKnowledgeFragments([output], 'Nie mam tej informacji w bazie wiedzy.'), []);
+  const weak = { ...output, fragmenty: [{ tytul: 'FAQ', tresc: 'x', podobienstwo: 0.3 }] };
+  assert.deepEqual(usedKnowledgeFragments([weak], '📎 Źródło: FAQ'), []);
 });
 
 test('searchKnowledge: brak trafień daje ok=true z komunikatem, a nie zmyślone dane', async () => {
@@ -58,7 +81,7 @@ test('searchKnowledge: brak trafień daje ok=true z komunikatem, a nie zmyślone
   const result = await searchKnowledgeBase({ pytanie: 'pogoda w Krakowie' });
   assert.equal(result.ok, true);
   assert.deepEqual(result.fragmenty, []);
-  assert.match(result.komunikat, /nie zwróciła żadnych fragmentów/);
+  assert.match(result.komunikat, /nie ma fragmentów/);
 });
 
 test('searchKnowledge: awaria embeddingów albo bazy daje czytelny błąd', async () => {
@@ -82,6 +105,8 @@ test('searchKnowledge jest w narzędziach czatu, ma plakietkę, opis i zasady w 
   assert.match(AGENT_CHAT_INSTRUCTIONS, /Nie mam tej informacji w bazie wiedzy/);
   assert.match(AGENT_CHAT_INSTRUCTIONS, /ani z wyszukiwarki internetowej/);
   assert.match(AGENT_CHAT_INSTRUCTIONS, /Fragment na podobny temat to jeszcze nie odpowiedź/);
+  assert.match(AGENT_CHAT_INSTRUCTIONS, /czego brakuje w bazie wiedzy/);
+  assert.equal(TOOL_LABELS.searchKnowledge, '📚 baza wiedzy');
 });
 
 test('endpoint agenta sprawdza sesję, zanim uruchomi czat z narzędziami', () => {
