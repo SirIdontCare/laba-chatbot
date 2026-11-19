@@ -148,3 +148,39 @@ test("krótkie cytaty w wyliczeniu dziedziczą deklarację lubię z tego samego 
   } }, { toolCallId: "third-party", messages: [] })).ok, false);
   assert.equal(writes.length, 1);
 });
+
+test("trzy preferencje: pytania o braki i zapis krótkich odpowiedzi w kontekście", async t => {
+  const { profileFollowUp } = require("../lib/user-profile.ts");
+  assert.match(profileFollowUp({}), /W jakim mieście mieszkasz/);
+  assert.match(profileFollowUp({ miasto: "Kraków" }), /Jakie jest Twoje ulubione danie/);
+  assert.match(profileFollowUp({ miasto: "Kraków", ulubione_danie: "pierogi" }), /Jaki środek transportu preferujesz/);
+  assert.match(profileFollowUp({ miasto: "Kraków", ulubione_danie: "pierogi", preferowany_transport: "pociąg" }), /Nie pytaj/);
+  const writes = [];
+  t.mock.method(global, "fetch", async (_url, options) => {
+    writes.push(JSON.parse(options.body));
+    return new Response(null, { status: 204 });
+  });
+  const token = await createSession(authConfig());
+  let source = "Kraków";
+  let previous = "W jakim mieście mieszkasz?";
+  const tool = createProfileTool(token, () => source, () => previous);
+  for (const [key, value, question] of [
+    ["miasto", "Kraków", "W jakim mieście mieszkasz?"],
+    ["ulubione_danie", "pierogi", "Jakie jest Twoje ulubione danie?"],
+    ["preferowany_transport", "pociąg", "Jaki środek transportu preferujesz?"],
+  ]) {
+    source = value; previous = question;
+    assert.equal((await tool.execute({ preferences: { [key]: { value, quote: value } } },
+      { toolCallId: key, messages: [] })).ok, true);
+    assert.deepEqual(writes.at(-1).p_preferences, { [key]: value });
+  }
+  previous = "Jaki środek transportu preferujesz?";
+  source = "nie wiem";
+  assert.equal((await tool.execute({ preferences: { preferowany_transport: {
+    value: source, quote: source,
+  } } }, { toolCallId: "decline", messages: [] })).ok, false);
+  source = "Kraków"; previous = "Opisz mi miasto.";
+  assert.equal((await tool.execute({ preferences: { miasto: { value: source, quote: source } } },
+    { toolCallId: "no-question", messages: [] })).ok, false);
+  assert.equal(writes.length, 3);
+});

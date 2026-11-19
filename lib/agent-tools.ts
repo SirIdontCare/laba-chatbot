@@ -10,9 +10,9 @@ import { obejrzyjObraz } from "./image-inspection";
 import { AGENT_STEP_LIMIT } from "./tool-catalog";
 import { createProfileTool } from "./user-profile";
 
-export function createAgentTools(sessionScope: string, token = "", currentMessage = () => "") {
+export function createAgentTools(sessionScope: string, token = "", currentMessage = () => "", previousAssistant = () => "") {
   const tools = { aktualnyCzas, czas, pogoda, waluty, swieta, wikipedia, kalkulator,
     notatki: createNotesTool(sessionScope), generujObraz, obejrzyjObraz,
-    zapiszProfil: createProfileTool(token, currentMessage) };
+    zapiszProfil: createProfileTool(token, currentMessage, previousAssistant) };
   return { ...tools, diagnostyka: createDiagnosticsTool([...Object.keys(tools), "diagnostyka", "web_search"], AGENT_STEP_LIMIT) };
 }
