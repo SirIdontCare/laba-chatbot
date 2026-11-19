@@ -13,71 +13,120 @@ export const BACKFILL_LIMIT = 200;
 export const uploadSchema = z.strictObject({
   title: z.string().trim().min(1).max(MAX_TITLE_CHARS),
   content: z.string().trim().min(1).max(MAX_CONTENT_CHARS),
+  // true = użytkownik potwierdził zastąpienie dokumentu o tym samym tytule.
+  replace: z.boolean().optional(),
 });
+export type UploadInput = z.infer<typeof uploadSchema>;
 
-// Błąd z komunikatem po polsku, który można pokazać użytkownikowi.
+// Etapy importu w kolejności; serwer zgłasza każdy z nich, zanim go wykona.
+export type ImportStage = "split" | "embed" | "save";
+
+// Błąd z komunikatem po polsku (co się stało i co zrobić), który można pokazać użytkownikowi.
 export class KnowledgeBaseError extends Error {
-  constructor(message: string) {
+  constructor(message: string, readonly stage: ImportStage) {
     super(message);
     this.name = "KnowledgeBaseError";
   }
 }
 
 export const KB_MESSAGES = {
-  config: "Na serwerze brakuje konfiguracji modelu embeddingów (OPENROUTER_EMBEDDING_MODEL). Dokument nie został zapisany.",
+  empty: "Tekst nie zawiera akapitów do zapisania. Wklej treść dokumentu i spróbuj ponownie.",
+  config: "Na serwerze brakuje konfiguracji modelu embeddingów (OPENROUTER_EMBEDDING_MODEL). Nic nie zostało zapisane. Poproś administratora o uzupełnienie konfiguracji.",
+  embeddings: "Model embeddingów nie zwrócił poprawnych wektorów. Nic nie zostało zapisane. Spróbuj ponownie za chwilę; jeśli błąd się powtarza, sprawdź konfigurację modelu embeddingów.",
   document: "Nie udało się zapisać dokumentu w bazie wiedzy. Nic nie zostało zapisane. Spróbuj ponownie za chwilę.",
-  embeddings: "Nie udało się przygotować dokumentu do wyszukiwania (błąd tworzenia embeddingów). Dokument nie został zapisany. Spróbuj ponownie za chwilę.",
-  chunks: "Nie udało się zapisać fragmentów dokumentu. Dokument nie został zapisany. Spróbuj ponownie za chwilę.",
-  cleanup: "Nie udało się zapisać dokumentu, a jego niedokończona wersja mogła zostać w bazie wiedzy. Spróbuj ponownie za chwilę.",
+  chunks: "Nie udało się zapisać fragmentów dokumentu. Nowa wersja nie została zapisana. Spróbuj ponownie za chwilę.",
+  cleanup: "Nie udało się zapisać fragmentów, a niedokończona nowa wersja mogła zostać w bazie. Sprawdź listę dokumentów poniżej, usuń niepełną wersję i spróbuj ponownie.",
+  keptOld: "Poprzednia wersja dokumentu pozostała bez zmian.",
 } as const;
 
-type StoredChunk = { id: number; content: string };
+export type ExistingDocument = { id: number; title: string; created_at: string; chunks: number };
 
-// Zapisuje dokument, jego fragmenty i embeddingi fragmentów. Jednym wywołaniem embedMany
-// tworzy wektory dla nowych fragmentów i dla starszych fragmentów z pustą kolumną embedding.
-// Gdy embeddingi albo zapis fragmentów się nie udadzą, usuwa niedokończony dokument.
-export async function saveDocument(input: z.infer<typeof uploadSchema>) {
-  const chunks = splitIntoChunks(input.content);
-  if (!chunks.length) throw new KnowledgeBaseError(KB_MESSAGES.document);
-  let model;
-  try { model = embeddingModel(); } catch { throw new KnowledgeBaseError(KB_MESSAGES.config); }
+type DocumentRow = { id: number; title: string; created_at: string; chunks: { count: number }[] | null };
+const toDocument = (row: DocumentRow): ExistingDocument =>
+  ({ id: row.id, title: row.title, created_at: row.created_at, chunks: row.chunks?.[0]?.count ?? 0 });
+
+// Lista dokumentów: tytuł = nazwa źródła, data dodania = wersja, liczba fragmentów.
+export async function listDocuments(): Promise<ExistingDocument[]> {
+  const { data, error } = await getSupabase().from("documents")
+    .select("id, title, created_at, chunks(count)").order("created_at", { ascending: false });
+  if (error || !Array.isArray(data)) throw new Error("Nie udało się wczytać dokumentów.");
+  return (data as DocumentRow[]).map(toDocument);
+}
+
+export async function findDocumentsByTitle(title: string): Promise<ExistingDocument[]> {
+  const { data, error } = await getSupabase().from("documents")
+    .select("id, title, created_at, chunks(count)").eq("title", title).order("created_at", { ascending: false });
+  if (error || !Array.isArray(data)) throw new Error("Nie udało się sprawdzić dokumentów.");
+  return (data as DocumentRow[]).map(toDocument);
+}
+
+// Usuwa dokument z fragmentami. Zwraca false, gdy dokumentu już nie było.
+export async function deleteDocument(id: number): Promise<boolean> {
   const supabase = getSupabase();
+  const { error: chunksError } = await supabase.from("chunks").delete().eq("document_id", id);
+  if (chunksError) throw new Error("Nie udało się usunąć fragmentów.");
+  const { data, error } = await supabase.from("documents").delete().eq("id", id).select("id");
+  if (error) throw new Error("Nie udało się usunąć dokumentu.");
+  return Boolean(data?.length);
+}
 
-  // Starsze fragmenty bez embeddingu; błąd odczytu nie blokuje importu nowego dokumentu.
-  const { data: pending } = await supabase.from("chunks").select("id, content")
+type StoredChunk = { id: number; content: string };
+type SaveOptions = { replaceIds?: number[]; onStage?: (stage: ImportStage) => void | Promise<void> };
+
+// Import dokumentu w trzech etapach: podział tekstu, embeddingi (jedno embedMany dla nowych fragmentów
+// i starszych z pustym embeddingiem), zapis. Nowa wersja trafia do bazy dopiero z kompletem wektorów;
+// stare wersje (replaceIds) usuwamy dopiero po udanym zapisie nowej, więc błąd ich nie narusza.
+export async function saveDocument(input: UploadInput, { replaceIds = [], onStage }: SaveOptions = {}) {
+  const keep = replaceIds.length ? ` ${KB_MESSAGES.keptOld}` : "";
+
+  await onStage?.("split");
+  const chunks = splitIntoChunks(input.content);
+  if (!chunks.length) throw new KnowledgeBaseError(KB_MESSAGES.empty, "split");
+
+  await onStage?.("embed");
+  let model;
+  try { model = embeddingModel(); } catch { throw new KnowledgeBaseError(KB_MESSAGES.config + keep, "embed"); }
+  const supabase = getSupabase();
+  // Starsze fragmenty bez embeddingu (bez fragmentów zastępowanych wersji); błąd odczytu nie blokuje importu.
+  const { data: pending } = await supabase.from("chunks").select("id, content, document_id")
     .is("embedding", null).order("id").limit(BACKFILL_LIMIT);
-  const stale: StoredChunk[] = Array.isArray(pending) ? pending : [];
-
-  const { data: document, error } = await supabase
-    .from("documents").insert({ title: input.title }).select("id").single();
-  if (error || !document) throw new KnowledgeBaseError(KB_MESSAGES.document);
-  const documentId = document.id as number;
-
-  const discard = async (message: string): Promise<never> => {
-    const { error: chunksDeleteError } = await supabase.from("chunks").delete().eq("document_id", documentId);
-    const { error: documentDeleteError } = await supabase.from("documents").delete().eq("id", documentId);
-    throw new KnowledgeBaseError(chunksDeleteError || documentDeleteError ? KB_MESSAGES.cleanup : message);
-  };
-
+  const stale: StoredChunk[] = (Array.isArray(pending) ? pending : [])
+    .filter(chunk => !replaceIds.includes(chunk.document_id));
   let embeddings: number[][];
   try {
     ({ embeddings } = await embedMany({ model, values: [...chunks, ...stale.map(chunk => chunk.content)] }));
   } catch {
-    return discard(KB_MESSAGES.embeddings);
+    throw new KnowledgeBaseError(KB_MESSAGES.embeddings + keep, "embed");
   }
   if (embeddings.length !== chunks.length + stale.length || !embeddings.every(validEmbedding)) {
-    return discard(KB_MESSAGES.embeddings);
+    throw new KnowledgeBaseError(KB_MESSAGES.embeddings + keep, "embed");
   }
 
-  // Nowe fragmenty trafiają do bazy od razu z embeddingami: jeden insert, wszystko albo nic.
+  await onStage?.("save");
+  const { data: document, error } = await supabase
+    .from("documents").insert({ title: input.title }).select("id, created_at").single();
+  if (error || !document) throw new KnowledgeBaseError(KB_MESSAGES.document + keep, "save");
+  const documentId = document.id as number;
+
+  // Nowe fragmenty od razu z embeddingami: jeden insert, wszystko albo nic.
   const { error: chunksError } = await supabase.from("chunks").insert(
     chunks.map((content, chunk_index) => ({ document_id: documentId, chunk_index, content, embedding: embeddings[chunk_index] })),
   );
-  if (chunksError) return discard(KB_MESSAGES.chunks);
+  if (chunksError) {
+    let cleaned = false;
+    try { await deleteDocument(documentId); cleaned = true; } catch {}
+    throw new KnowledgeBaseError(cleaned ? KB_MESSAGES.chunks + keep : KB_MESSAGES.cleanup, "save");
+  }
 
   const backfill = await backfillEmbeddings(stale, embeddings.slice(chunks.length));
-  return { id: documentId, title: input.title, chunks: chunks.length, ...backfill };
+  let replaced = 0, replaceFailed = 0;
+  for (const id of replaceIds) {
+    try { await deleteDocument(id); replaced++; } catch { replaceFailed++; }
+  }
+  return { id: documentId, title: input.title, created_at: document.created_at as string,
+    chunks: chunks.length, ...backfill, replaced, replaceFailed };
 }
+export type SavedDocument = Awaited<ReturnType<typeof saveDocument>>;
 
 function validEmbedding(embedding: unknown): embedding is number[] {
   return Array.isArray(embedding) && embedding.length === EMBEDDING_DIMENSIONS && embedding.every(Number.isFinite);
