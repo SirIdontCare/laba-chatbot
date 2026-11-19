@@ -26,7 +26,7 @@ OPENROUTER_MODEL=
 
 Po pierwszym `=` wpisz swój klucz OpenRouter. Po drugim wpisz dokładny identyfikator modelu skopiowany z [listy modeli OpenRouter](https://openrouter.ai/models), w formacie `dostawca/model`. Wartości podajesz wyłącznie w lokalnym pliku, nie w rozmowie. Nie dodawaj prefiksu `NEXT_PUBLIC_`.
 
-Historia czatu wymaga adresu projektu w `SUPABASE_URL` oraz klucza serwerowego w `SUPABASE_SECRET_KEY`. Obie zmienne należą do środowiska serwera. Skrypt `supabase/create_chat_tables.sql` uzupełnia tabele `conversations` i `messages` oraz instaluje funkcję zapisu pary wiadomości. Czat zapisuje zakończone tury wraz z tekstem i dopiskami `[obraz]`. Ponowne logowanie rozpoczyna odrębną sesję.
+Historia czatu wymaga adresu projektu w `SUPABASE_URL` oraz klucza serwerowego w `SUPABASE_SECRET_KEY`. Obie zmienne należą do środowiska serwera. Skrypt `supabase/create_chat_tables.sql` uzupełnia tabele `conversations` i `messages` oraz instaluje funkcję zapisu pary wiadomości. Czat zapisuje zakończone tury wraz z tekstem i dopiskami `[obraz]`. Historia jest wspólna dla wszystkich logowań: klucz w bazie wynika z `SESSION_SECRET` (HMAC), nie z tokenu sesji, więc każdy, kto zna hasło, widzi wszystkie rozmowy. Zmiana hasła jej nie ukrywa; zmiana `SESSION_SECRET` tak. Localhost i Vercel mają wspólną historię tylko przy tej samej bazie i tym samym `SESSION_SECRET`.
 
 Zapisz plik. Jeśli serwer działał podczas zmiany konfiguracji, uruchom go ponownie: zakończ go przez `Ctrl+C`, a następnie wpisz w terminalu:
 

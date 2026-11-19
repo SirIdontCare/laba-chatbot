@@ -1,5 +1,5 @@
 import "server-only";
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import type { ChatMessage } from "./chat-message";
 import { imageToolOutputSchema, inspectionOutputSchema } from "./image-tool-schema";
 import { getSupabase } from "./supabase";
@@ -42,8 +42,13 @@ type StoredMessage = {
   content: string;
 };
 
-function sessionScope(token: string) {
-  return createHash("sha256").update(token).digest("hex");
+// Historia jest wspólna dla wszystkich logowań tym samym hasłem: klucz zależy
+// tylko od SESSION_SECRET, nie od tokenu. Wywołujący sprawdza sesję wcześniej.
+// Zmiana hasła nie ukrywa historii; zmiana sekretu tak.
+function sessionScope(_token: string) {
+  const secret = process.env.SESSION_SECRET;
+  if (!secret) throw new Error("Missing SESSION_SECRET.");
+  return createHmac("sha256", secret).update("chat-history-v1").digest("hex");
 }
 
 function messageContent(message: Pick<ChatMessage, "parts">) {
