@@ -24,6 +24,8 @@ beforeEach(() => {
   rpcReply = () => Response.json([
     { id: 1, document_id: 1, title: 'Cennik 2026', content: 'Pakiet Start kosztuje 490 zł netto miesięcznie.', similarity: 0.71234 },
     { id: 2, document_id: 2, title: 'FAQ', content: 'Nie na temat.', similarity: 0.1 },
+    { id: 3, document_id: 3, title: 'Regulamin', content: 'Okres próbny trwa 14 dni.', similarity: 0.5 },
+    { id: 4, document_id: 2, title: 'FAQ', content: 'Czwarty fragment.', similarity: 0.05 },
   ]);
   globalThis.fetch = async (input, init = {}) => {
     const url = new URL(typeof input === 'string' || input instanceof URL ? input : input.url);
@@ -38,23 +40,28 @@ beforeEach(() => {
   };
 });
 
-test('bazaWiedzy: embedding pytania → match_chunks → tylko trafne fragmenty ze źródłem', async () => {
+test('searchKnowledge: embedding pytania → match_chunks → 3 najlepsze fragmenty z tytułem, treścią i podobieństwem', async () => {
   const result = await searchKnowledgeBase({ pytanie: 'ile kosztuje pakiet start?' });
-  assert.equal(rpcBody.match_count, KB_MATCH_COUNT);
+  assert.equal(KB_MATCH_COUNT, 3);
+  assert.equal(rpcBody.match_count, 3);
   assert.equal(rpcBody.query_embedding.length, EMBEDDING_DIMENSIONS);
   assert.equal(result.ok, true);
-  assert.deepEqual(result.fragmenty, [{ zrodlo: 'Cennik 2026', tresc: 'Pakiet Start kosztuje 490 zł netto miesięcznie.', podobienstwo: 0.71 }]);
+  assert.deepEqual(result.fragmenty, [
+    { tytul: 'Cennik 2026', tresc: 'Pakiet Start kosztuje 490 zł netto miesięcznie.', podobienstwo: 0.71 },
+    { tytul: 'Regulamin', tresc: 'Okres próbny trwa 14 dni.', podobienstwo: 0.5 },
+    { tytul: 'FAQ', tresc: 'Nie na temat.', podobienstwo: 0.1 },
+  ]);
 });
 
-test('bazaWiedzy: brak trafień daje ok=true z komunikatem, a nie zmyślone dane', async () => {
+test('searchKnowledge: brak trafień daje ok=true z komunikatem, a nie zmyślone dane', async () => {
   rpcReply = () => Response.json([]);
   const result = await searchKnowledgeBase({ pytanie: 'pogoda w Krakowie' });
   assert.equal(result.ok, true);
   assert.deepEqual(result.fragmenty, []);
-  assert.match(result.komunikat, /nie ma fragmentów/);
+  assert.match(result.komunikat, /nie zwróciła żadnych fragmentów/);
 });
 
-test('bazaWiedzy: awaria embeddingów albo bazy daje czytelny błąd', async () => {
+test('searchKnowledge: awaria embeddingów albo bazy daje czytelny błąd', async () => {
   embedStatus = 500;
   assert.equal((await searchKnowledgeBase({ pytanie: 'pakiet start' })).ok, false);
   embedStatus = 200;
@@ -64,8 +71,20 @@ test('bazaWiedzy: awaria embeddingów albo bazy daje czytelny błąd', async () 
   assert.match(result.komunikat, /bazy wiedzy/);
 });
 
-test('bazaWiedzy jest w narzędziach czatu, ma plakietkę i pierwszeństwo przed internetem w instrukcji', () => {
-  assert.ok(createAgentTools('scope').bazaWiedzy);
-  assert.ok(TOOL_LABELS.bazaWiedzy);
-  assert.match(AGENT_CHAT_INSTRUCTIONS, /Baza wiedzy ma pierwszeństwo przed internetem/);
+test('searchKnowledge jest w narzędziach czatu, ma plakietkę, opis i zasady w instrukcji', () => {
+  const tools = createAgentTools('scope');
+  assert.ok(tools.searchKnowledge);
+  assert.equal(tools.bazaWiedzy, undefined);
+  assert.ok(TOOL_LABELS.searchKnowledge);
+  assert.match(tools.searchKnowledge.description, /firmę, ofertę, ceny, zasady i regulamin/);
+  assert.match(AGENT_CHAT_INSTRUCTIONS, /wyłącznie na podstawie fragmentów zwróconych przez searchKnowledge/);
+  assert.match(AGENT_CHAT_INSTRUCTIONS, /📎 Źródło: \[tytuł dokumentu\]/);
+  assert.match(AGENT_CHAT_INSTRUCTIONS, /Nie mam tej informacji w bazie wiedzy/);
+  assert.match(AGENT_CHAT_INSTRUCTIONS, /ani z wyszukiwarki internetowej/);
+  assert.match(AGENT_CHAT_INSTRUCTIONS, /Fragment na podobny temat to jeszcze nie odpowiedź/);
+});
+
+test('endpoint agenta sprawdza sesję, zanim uruchomi czat z narzędziami', () => {
+  const route = readFileSync(require.resolve('../app/api/agent/route.ts'), 'utf8');
+  assert.ok(route.indexOf('validSession(token)') < route.indexOf('agentChat(request'));
 });

@@ -1,7 +1,7 @@
 // Wspólne nazwy dla plakietek w UI i rejestru narzędzi na serwerze.
 export const TOOL_LABELS = {
   zapiszProfil: "🧠 pamięć użytkownika",
-  bazaWiedzy: "📖 baza wiedzy",
+  searchKnowledge: "📖 baza wiedzy",
   web_search: "🔎 wyszukiwanie",
   aktualnyCzas: "🕒 aktualnyCzas",
   czas: "🕒 czas",
