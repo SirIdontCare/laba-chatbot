@@ -5,7 +5,9 @@ import { useState, type FormEvent } from "react";
 const MAX_TITLE = 200;
 const MAX_CONTENT = 20_000;
 
-function fragmentWord(count: number) {
+// genitive: forma po „embeddingi …” (1 fragmentu, 2 fragmentów, 5 fragmentów).
+function fragmentWord(count: number, genitive = false) {
+  if (genitive) return count === 1 ? "fragmentu" : "fragmentów";
   if (count === 1) return "fragment";
   const last = count % 10, lastTwo = count % 100;
   return last >= 2 && last <= 4 && (lastTwo < 12 || lastTwo > 14) ? "fragmenty" : "fragmentów";
@@ -30,8 +32,13 @@ export default function UploadForm() {
         headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title, content }) });
       if (response.status === 401) { window.location.replace("/upload"); return; }
       if (!response.ok) { setError(await response.text() || "Nie udało się zapisać dokumentu."); return; }
-      const saved = await response.json() as { title: string; chunks: number };
-      setSuccess(`Zapisano dokument „${saved.title}”: ${saved.chunks} ${fragmentWord(saved.chunks)}.`);
+      const saved = await response.json() as { title: string; chunks: number; backfilled: number; backfillFailed: number };
+      let message = `Zapisano dokument „${saved.title}”: ${saved.chunks} ${fragmentWord(saved.chunks)} z embeddingami.`;
+      if (saved.backfilled) message += ` Uzupełniono też embeddingi ${saved.backfilled} ${fragmentWord(saved.backfilled, true)} zapisanych wcześniej.`;
+      setSuccess(message);
+      if (saved.backfillFailed) {
+        setError(`Nie udało się uzupełnić embeddingów ${saved.backfillFailed} ${fragmentWord(saved.backfillFailed, true)} zapisanych wcześniej. Spróbuję ponownie przy następnym imporcie.`);
+      }
       setTitle("");
       setContent("");
     } catch {

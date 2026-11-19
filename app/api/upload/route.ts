@@ -1,6 +1,6 @@
 import { requestToken, sameOrigin, validSession } from "../../../lib/session";
 import { AUTH_MESSAGES } from "../../../lib/auth-messages";
-import { saveDocument, uploadSchema } from "../../../lib/knowledge-base";
+import { KB_MESSAGES, KnowledgeBaseError, saveDocument, uploadSchema } from "../../../lib/knowledge-base";
 
 export async function POST(request: Request) {
   // Bramka sesji przed odczytem danych i przed bazą.
@@ -15,7 +15,7 @@ export async function POST(request: Request) {
   }
   try {
     return Response.json(await saveDocument(input.data));
-  } catch {
-    return new Response("Nie udało się zapisać dokumentu w bazie wiedzy. Nic nie zostało zapisane. Spróbuj ponownie za chwilę.", { status: 503 });
+  } catch (error) {
+    return new Response(error instanceof KnowledgeBaseError ? error.message : KB_MESSAGES.document, { status: 503 });
   }
 }

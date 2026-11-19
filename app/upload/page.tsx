@@ -11,7 +11,7 @@ export default async function UploadPage() {
   return <main className="chat">
     <h1>Baza wiedzy</h1>
     <Link href="/">Wróć do czatu</Link>
-    <p>Wklej dokument. Każdy akapit (tekst oddzielony pustą linią) zostanie zapisany jako osobny fragment.</p>
+    <p>Wklej dokument. Każdy akapit (tekst oddzielony pustą linią) zostanie zapisany jako osobny fragment razem z embeddingiem do wyszukiwania.</p>
     <UploadForm />
   </main>;
 }
