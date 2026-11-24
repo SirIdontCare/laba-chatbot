@@ -1,17 +1,25 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useRef, useState, type FormEvent } from "react";
 import { AUTH_MESSAGES, MIN_PASSWORD_LENGTH, authErrorMessage } from "../../lib/auth-messages";
 import { createSupabaseBrowserClient } from "../../lib/supabase-browser";
 import ThemeToggle from "../theme-toggle";
 
 type Mode = "login" | "signup";
 
-export default function AuthForm({ configured, confirmFailed }: { configured: boolean; confirmFailed: boolean }) {
+export default function AuthForm({ configured, confirmFailed, next }: {
+  configured: boolean;
+  confirmFailed: boolean;
+  // Bezpieczna ścieżka tej aplikacji (sprawdzona na serwerze) albo null.
+  next: string | null;
+}) {
+  const destination = next ?? "/";
   const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [pending, setPending] = useState(false);
+  // Blokada także dla szybkiego podwójnego kliknięcia, zanim React odświeży przycisk.
+  const busy = useRef(false);
   const [error, setError] = useState(confirmFailed ? AUTH_MESSAGES.confirmFailed : "");
   const [info, setInfo] = useState("");
 
@@ -23,7 +31,7 @@ export default function AuthForm({ configured, confirmFailed }: { configured: bo
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending) return;
+    if (busy.current) return;
     setError("");
     setInfo("");
     const address = email.trim();
@@ -33,17 +41,20 @@ export default function AuthForm({ configured, confirmFailed }: { configured: bo
     const supabase = createSupabaseBrowserClient();
     if (!supabase) return setError(AUTH_MESSAGES.configuration);
 
+    busy.current = true;
     setPending(true);
     try {
       if (mode === "login") {
         const { error: loginError } = await supabase.auth.signInWithPassword({ email: address, password });
         if (loginError) throw loginError;
-        window.location.replace("/");
+        window.location.replace(destination);
         return;
       }
       const { data, error: signupError } = await supabase.auth.signUp({
         email: address, password,
-        options: { emailRedirectTo: `${window.location.origin}/auth/confirm` },
+        options: {
+          emailRedirectTo: `${window.location.origin}/auth/confirm${next ? `?next=${encodeURIComponent(next)}` : ""}`,
+        },
       });
       if (signupError) throw signupError;
       // Przy włączonym potwierdzaniu e-maili Supabase nie zgłasza błędu dla istniejącego
@@ -51,7 +62,7 @@ export default function AuthForm({ configured, confirmFailed }: { configured: bo
       if (data.user && data.user.identities?.length === 0) {
         setError(AUTH_MESSAGES.accountExists);
       } else if (data.session) {
-        window.location.replace("/");
+        window.location.replace(destination);
         return;
       } else {
         setInfo(AUTH_MESSAGES.confirmEmail);
@@ -61,6 +72,7 @@ export default function AuthForm({ configured, confirmFailed }: { configured: bo
       setError(authErrorMessage(failure as Parameters<typeof authErrorMessage>[0]));
     }
     setPassword("");
+    busy.current = false;
     setPending(false);
   }
 
@@ -92,8 +104,8 @@ export default function AuthForm({ configured, confirmFailed }: { configured: bo
             minLength={signup ? MIN_PASSWORD_LENGTH : undefined}
             value={password} onChange={(event) => setPassword(event.target.value)}
             disabled={pending || !configured} required />
-          <button type="submit" disabled={pending || !configured || !email.trim() || !password}>
-            {pending ? (signup ? "Zakładam konto…" : "Loguję…") : (signup ? "Załóż konto" : "Zaloguj się")}
+          <button type="submit" disabled={pending || !configured || !email.trim() || !password} aria-busy={pending}>
+            {pending ? "Chwileczkę…" : (signup ? "Załóż konto" : "Zaloguj się")}
           </button>
         </div>
       </form>

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { createRouteClient } from "../../../lib/supabase-server";
+import { loginPath, safeNextPath } from "../../../lib/redirect-target";
 
 // Link z e-maila potwierdzającego konto. Obsługuje token_hash (szablon z dokumentacji
 // Supabase SSR) oraz code (domyślny przepływ PKCE). Przekierowuje tylko na stałe
@@ -20,9 +21,12 @@ export async function GET(request: NextRequest) {
   } catch {
     confirmed = false;
   }
+  const next = safeNextPath(params.get("next"));
+  const path = new URL(confirmed ? next ?? "/" : loginPath(next), "http://app.invalid");
   const target = request.nextUrl.clone();
-  target.search = "";
-  target.pathname = confirmed ? "/" : "/login";
+  target.pathname = path.pathname;
+  target.search = path.search;
+  target.hash = "";
   if (!confirmed) target.searchParams.set("error", "confirm");
   return NextResponse.redirect(target);
 }

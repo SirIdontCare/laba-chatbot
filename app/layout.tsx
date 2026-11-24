@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import "./globals.css";
+import SessionGuard from "./session-guard";
 
 export const metadata: Metadata = {
   title: "Mój chatbot",
@@ -13,7 +14,7 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <head>
         <script dangerouslySetInnerHTML={{ __html: `try{var t=localStorage.getItem('chat-theme');if(t==='light'||t==='dark')document.documentElement.dataset.theme=t}catch{}` }} />
       </head>
-      <body>{children}</body>
+      <body>{children}<SessionGuard /></body>
     </html>
   );
 }

@@ -165,3 +165,5 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .user-menu { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
 .user-email { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
 .user-menu .error { flex-basis: 100%; margin: 0; }
+/* Po wylogowaniu i przy powrocie „Wstecz” treść jest ukryta do czasu ponownego sprawdzenia sesji. */
+html[data-signed-out] body { visibility: hidden; }

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { loginPath } from "../../lib/redirect-target";
 import { currentUser } from "../../lib/supabase-server";
 import { listChats } from "../../lib/chat-history";
 import UserMenu from "../user-menu";
@@ -7,7 +8,7 @@ import DeleteChatButton from "./delete-chat-button";
 
 export default async function HistoryPage() {
   const user = await currentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(loginPath("/history"));
   let chats;
   try {
     chats = await listChats();

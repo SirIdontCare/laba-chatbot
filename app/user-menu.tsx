@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AUTH_MESSAGES } from "../lib/auth-messages";
 import { createSupabaseBrowserClient } from "../lib/supabase-browser";
+import { hidePageContent } from "../lib/page-privacy";
 
 // E-mail zalogowanej osoby i przycisk „Wyloguj”. E-mail pochodzi ze strony
 // serwerowej, która zweryfikowała sesję.
@@ -29,6 +30,8 @@ export default function UserMenu({ email, onBeforeLogout, onLeavingChange }: {
         const { error: signOutError } = await supabase.auth.signOut({ scope: "local" });
         if (signOutError) throw signOutError;
       }
+      // Dane poprzedniej osoby znikają z ekranu od razu, jeszcze przed przejściem na /login.
+      hidePageContent();
       window.location.replace("/login");
     } catch {
       setError(AUTH_MESSAGES.logoutFailed);

@@ -1,14 +1,18 @@
 import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 import { supabaseAuthConfig } from "./supabase-config";
+import { loginPath, safeNextPath } from "./redirect-target";
 
 // Strony dostępne bez logowania. /auth/confirm kończy potwierdzenie adresu e-mail.
 const isPublicPath = (path: string) => path === "/login" || path.startsWith("/auth/");
 
-function redirectWithSession(request: NextRequest, pathname: string, from: NextResponse) {
+// `target` to ścieżka tej aplikacji, np. "/login?next=%2Fupload".
+function redirectWithSession(request: NextRequest, target: string, from: NextResponse) {
+  const parsed = new URL(target, "http://app.invalid");
   const url = request.nextUrl.clone();
-  url.pathname = pathname;
-  url.search = "";
+  url.pathname = parsed.pathname;
+  url.search = parsed.search;
+  url.hash = "";
   const redirect = NextResponse.redirect(url);
   // Odświeżone lub usunięte ciasteczka sesji i nagłówki zakazu cache muszą przejść dalej.
   for (const cookie of from.cookies.getAll()) redirect.cookies.set(cookie);
@@ -53,7 +57,12 @@ export async function updateSession(request: NextRequest) {
   const path = request.nextUrl.pathname;
   // Endpointy API same zwracają 401, więc nie przekierowujemy ich na stronę logowania.
   if (path.startsWith("/api/")) return response;
-  if (!signedIn && !isPublicPath(path)) return redirectWithSession(request, "/login", response);
-  if (signedIn && path === "/login") return redirectWithSession(request, "/", response);
+  // Niezalogowany: zapamiętujemy, dokąd chciał wejść, i po zalogowaniu tam wracamy.
+  if (!signedIn && !isPublicPath(path)) {
+    return redirectWithSession(request, loginPath(path + request.nextUrl.search), response);
+  }
+  if (signedIn && path === "/login") {
+    return redirectWithSession(request, safeNextPath(request.nextUrl.searchParams.get("next")) ?? "/", response);
+  }
   return response;
 }

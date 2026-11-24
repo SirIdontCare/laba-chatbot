@@ -31,6 +31,7 @@ const { requestUser } = require("../lib/supabase-server.ts");
 const { sameOrigin } = require("../lib/request-origin.ts");
 const { updateSession } = require("../lib/supabase-proxy.ts");
 const { AUTH_MESSAGES, authErrorMessage, MIN_PASSWORD_LENGTH } = require("../lib/auth-messages.ts");
+const { safeNextPath, loginPath } = require("../lib/redirect-target.ts");
 const { NextRequest } = require("next/server");
 
 const origin = "http://localhost:3000";
@@ -185,23 +186,48 @@ test("brak konfiguracji Supabase blokuje dostęp (401)", async (t) => {
   assert.deepEqual(calls, []);
 });
 
-test("proxy: niezalogowany trafia na /login, API i strony logowania przechodzą dalej", async (t) => {
+test("proxy: niezalogowany trafia na /login z adresem powrotu, API i logowanie przechodzą dalej", async (t) => {
   authServer(t);
   const { cookie } = signIn(alice);
   const visit = (path, withCookie = "") => updateSession(new NextRequest(origin + path, { headers: withCookie ? { cookie: withCookie } : {} }));
-  for (const path of ["/", "/history", "/profile", "/upload", "/dashboard", "/?chat=3f2504e0-4f89-41d3-9a0c-0305e82c3301"]) {
+  const chatPath = "/?chat=3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+  for (const [path, next] of [["/", null], ["/history", "/history"], ["/profile", "/profile"], ["/upload", "/upload"],
+    ["/dashboard", "/dashboard"], [chatPath, chatPath]]) {
     const response = await visit(path);
     assert.equal(response.status, 307, path);
-    assert.equal(new URL(response.headers.get("location")).pathname, "/login", path);
-    assert.equal(new URL(response.headers.get("location")).search, "", path);
+    const location = new URL(response.headers.get("location"));
+    assert.equal(location.pathname, "/login", path);
+    assert.equal(location.searchParams.get("next"), next, path);
   }
   for (const path of ["/login", "/auth/confirm", "/api/agent"]) {
     assert.equal((await visit(path)).headers.get("x-middleware-next"), "1", path);
   }
   assert.equal((await visit("/history", cookie)).headers.get("x-middleware-next"), "1");
-  const loggedInLogin = await visit("/login", cookie);
-  assert.equal(loggedInLogin.status, 307);
-  assert.equal(new URL(loggedInLogin.headers.get("location")).pathname, "/");
+  // Zalogowany na /login wraca pod zapamiętany adres, ale nigdy na obcą stronę.
+  for (const [path, expected] of [["/login", "/"], ["/login?next=%2Fupload", "/upload"], [`/login?next=${encodeURIComponent(chatPath)}`, chatPath],
+    ["/login?next=%2F%2Fevil.example", "/"], ["/login?next=https%3A%2F%2Fevil.example", "/"], ["/login?next=%2F%5Cevil.example", "/"]]) {
+    const response = await visit(path, cookie);
+    assert.equal(response.status, 307, path);
+    const location = new URL(response.headers.get("location"));
+    assert.equal(location.origin, origin, path);
+    assert.equal(location.pathname + location.search, expected, path);
+  }
+});
+
+test("adres powrotu: tylko ścieżki wewnątrz aplikacji", () => {
+  for (const [value, expected] of [["/upload", "/upload"], ["/?chat=abc", "/?chat=abc"], ["/history#top", "/history#top"],
+    ["/profile?x=1&y=2", "/profile?x=1&y=2"], ["/%2F%2Fevil.example", "/%2F%2Fevil.example"]]) {
+    assert.equal(safeNextPath(value), expected, value);
+  }
+  for (const value of ["//evil.example", "/\\evil.example", "/\t/evil.example", "https://evil.example/upload", "http:/evil.example",
+    "javascript:alert(1)", "upload", "", " /upload", "/login", "/login?next=/upload", "/auth/confirm", "/api/agent", "/_next/static/x.js",
+    "/" + "a".repeat(2100), null, undefined, ["/upload"], 42]) {
+    assert.equal(safeNextPath(value), null, String(value));
+  }
+  assert.equal(loginPath("/upload"), "/login?next=%2Fupload");
+  assert.equal(loginPath("/?chat=abc"), "/login?next=%2F%3Fchat%3Dabc");
+  assert.equal(loginPath("/"), "/login");
+  assert.equal(loginPath("//evil.example"), "/login");
 });
 
 test("sprawdzanie źródła: NextRequest normalizuje 127.0.0.1, liczy się prawdziwy Host", () => {

@@ -15,6 +15,7 @@ import { imageToolInputSchema, imageToolOutputSchema, inspectionOutputSchema } f
 import { usedKnowledgeFragments } from "../lib/knowledge-schema";
 import KnowledgeSources from "./knowledge-sources";
 import UserMenu from "./user-menu";
+import { loginPath } from "../lib/redirect-target";
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/agent",
@@ -74,7 +75,7 @@ export default function ChatClient({ initialChat, historyError, profileName, ema
     messages: initialChat.messages,
     generateId: () => crypto.randomUUID(),
     onError: (failure) => {
-      if (failure.message === AUTH_MESSAGES.unauthorized) window.location.replace("/login");
+      if (failure.message === AUTH_MESSAGES.unauthorized) window.location.replace(loginPath(window.location.pathname + window.location.search));
     },
   });
   const conversation = useRef<HTMLDivElement>(null);

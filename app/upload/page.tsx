@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
+import { loginPath } from "../../lib/redirect-target";
 import { currentUser } from "../../lib/supabase-server";
 import { listDocuments } from "../../lib/knowledge-base";
 import UserMenu from "../user-menu";
@@ -15,7 +16,7 @@ function fragmentWord(count: number) {
 export default async function UploadPage() {
   // Lista dokumentów dopiero po weryfikacji użytkownika.
   const user = await currentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(loginPath("/upload"));
   let documents;
   try { documents = await listDocuments(); } catch { documents = null; }
   const format = new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Warsaw" });

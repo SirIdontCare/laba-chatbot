@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import { loginPath } from "../../lib/redirect-target";
 import { currentUser } from "../../lib/supabase-server";
 import { loadUserProfile } from "../../lib/user-profile";
 import UserMenu from "../user-menu";
@@ -6,7 +7,7 @@ import ProfileEditor from "./profile-editor";
 
 export default async function ProfilePage() {
   const user = await currentUser();
-  if (!user) redirect("/login");
+  if (!user) redirect(loginPath("/profile"));
   const header = <header className="chat-header"><h1>Profil</h1><UserMenu email={user.email} /></header>;
   let profile;
   try { profile = await loadUserProfile(); }

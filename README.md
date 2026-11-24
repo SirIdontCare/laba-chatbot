@@ -66,6 +66,9 @@ Strona `/login` ma zakładki „Zaloguj się” i „Załóż konto”. Hasło n
 - Każda strona (`currentUser()`) i każdy endpoint w `app/api` (`requestUser(request)`) weryfikuje użytkownika na serwerze przez `supabase.auth.getClaims()`, czyli sprawdza podpis tokenu, a nie samą obecność ciasteczka. Endpoint bez zalogowanego użytkownika zwraca `401`, zanim dotknie bazy albo modelu, a żądania z obcej strony dostają `403`.
 - Tożsamość pochodzi wyłącznie ze zweryfikowanego tokenu, nigdy z formularza, adresu strony ani odpowiedzi modelu.
 - „Wyloguj” w nagłówku kończy sesję tego urządzenia w Supabase i wraca do `/login`. Obok widać e-mail zalogowanej osoby.
+- Po wylogowaniu treść strony znika od razu, jeszcze przed przejściem na `/login`. Strony z danymi mają `Cache-Control: no-store`, a strona przywrócona przyciskiem „Wstecz” z pamięci przeglądarki jest pobierana od nowa (`app/session-guard.tsx`), więc serwer ponownie sprawdza sesję i nie pokazuje danych poprzedniej osoby. Wylogowanie w innej karcie też chowa treść.
+- Wejście na chronioną stronę bez logowania prowadzi na `/login?next=…`, a po zalogowaniu lub rejestracji aplikacja wraca pod ten adres. Przyjmowane są tylko ścieżki tej aplikacji (`lib/redirect-target.ts`); adresy innych stron, `/api/` i `/auth/` są ignorowane.
+- Podczas logowania i rejestracji przycisk jest zablokowany i pokazuje „Chwileczkę…”.
 - Limity prób logowania i rejestracji zapewnia Supabase Auth (Authentication → Rate Limits).
 
 `SESSION_SECRET` służy już tylko jako klucz wspólnej historii rozmów (patrz wyżej). `CHAT_PASSWORD` nie jest używane.
