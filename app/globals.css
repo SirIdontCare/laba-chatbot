@@ -158,3 +158,10 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .upload-form { display: grid; gap: 14px; margin: 20px 0; } .upload-form label { display: grid; gap: 6px; } .upload-form button { justify-self: start; } .upload-counter { margin: -6px 0 0; color: var(--muted); font-size: 0.875rem; }
 .document-list li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; } .document-list li > div:first-child { display: grid; gap: 6px; overflow-wrap: anywhere; }
 .upload-stages { margin: 0; padding-left: 22px; display: grid; gap: 4px; color: var(--muted); } .upload-stages [data-state="current"] { color: inherit; font-weight: 600; } .upload-stage-status:empty { display: none; } .upload-stage-status { margin: 0; }
+.auth-tabs { margin: 28px 0 0; }
+.login form > input { width: 100%; }
+.login .auth-password-label { margin-top: 16px; }
+.notice { padding: 12px 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--accent-soft); color: var(--ink); overflow-wrap: anywhere; }
+.user-menu { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; }
+.user-email { max-width: 240px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.user-menu .error { flex-basis: 100%; margin: 0; }

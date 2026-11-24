@@ -12,11 +12,11 @@ require.extensions[".ts"] = (module, filename) => {
 };
 Object.assign(process.env, {
   NODE_ENV: "development", VERCEL: "", VERCEL_PROJECT_PRODUCTION_URL: "",
-  CHAT_PASSWORD: "test-workshop-password",
   SESSION_SECRET: "offline-test-secret-32-characters-long",
   OPENROUTER_API_KEY: "test-key", OPENROUTER_MODEL: "google/test-model",
 });
-const { POST: login } = require("../app/api/auth/login/route.ts");
+const { installFakeAuth, TEST_AUTH_COOKIE } = require("./fake-auth.cjs");
+installFakeAuth();
 const { POST: chat } = require("../app/api/agent/route.ts");
 const { warsawTime } = require("../lib/chat-tools.ts");
 const { fetchWeather } = require("../lib/weather-tool.ts");
@@ -51,8 +51,7 @@ test("aktualnyCzas: wykonanie funkcji, wynik dla modelu i dalsza rozmowa", async
       headers: { "content-type": "text/event-stream" },
     });
   });
-  const session = await login(request("/api/auth/login", { password: "test-workshop-password" }));
-  const cookie = session.headers.get("set-cookie").split(";")[0];
+  const cookie = TEST_AUTH_COOKIE;
   const user = { id: "time-user", role: "user", parts: [{ type: "text", text: "Jaki dziś dzień i która godzina?" }] };
   const response = await chat(request("/api/agent", { messages: [user] }, cookie));
   assert.equal(response.status, 200);
@@ -108,8 +107,7 @@ test("wyszukiwanie: autoryzacja, ustawienia providera, źródła i dalsza rozmow
   assert.equal((await chat(request("/api/agent", { messages: [user] }))).status, 401);
   assert.equal(calls.length, 0);
 
-  const session = await login(request("/api/auth/login", { password: "test-workshop-password" }));
-  const cookie = session.headers.get("set-cookie").split(";")[0];
+  const cookie = TEST_AUTH_COOKIE;
   const before = Date.now();
   const response = await chat(request("/api/agent", { messages: [user] }, cookie));
   assert.equal(response.status, 200);
@@ -227,8 +225,7 @@ test("pogoda: model → API → ograniczone pola → model i dalsza rozmowa", as
   const user = { id: "weather-user", role: "user", parts: [{ type: "text", text: "Jaka pogoda w Warszawie?" }] };
   assert.equal((await chat(request("/api/agent", { messages: [user] }))).status, 401);
   assert.equal(calls.length + weatherUrls.length, 0);
-  const session = await login(request("/api/auth/login", { password: "test-workshop-password" }));
-  const cookie = session.headers.get("set-cookie").split(";")[0];
+  const cookie = TEST_AUTH_COOKIE;
   const before = Date.now();
   const response = await chat(request("/api/agent", { messages: [user] }, cookie));
   const chunks = (await response.text()).split("\n").filter((line) => line.startsWith("data: {"))

@@ -6,12 +6,13 @@ require.extensions[".ts"] = (module, filename) => module._compile(ts.transpileMo
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, filename);
 Object.assign(process.env, {
-  NODE_ENV: "development", VERCEL: "", CHAT_PASSWORD: "test-password",
+  NODE_ENV: "development", VERCEL: "",
   SESSION_SECRET: "offline-test-secret-32-characters-long",
   OPENROUTER_API_KEY: "fake-key", OPENROUTER_MODEL: "test/chat-model",
 });
+const { installFakeAuth, TEST_AUTH_COOKIE } = require("./fake-auth.cjs");
+installFakeAuth();
 const { POST: agent } = require("../app/api/agent/route.ts");
-const { createSession, authConfig } = require("../lib/session.ts");
 const { generujObraz } = require("../lib/image-generation.ts");
 const { publicImageUrlSchema } = require("../lib/image-tool-schema.ts");
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aShoAAAAASUVORK5CYII=";
@@ -28,7 +29,7 @@ test("agent: sesja jest przed trybem i wejściem; niepoprawny tryb nie uruchamia
   for (const body of [null, {}, { mode: "chat" }, { mode: "analyze" }]) {
     assert.equal((await agent(request(body))).status, 401);
   }
-  const cookie = `workshop-session=${await createSession(authConfig())}`;
+  const cookie = TEST_AUTH_COOKIE;
   for (const body of [null, {}, { mode: "image" }, { mode: "chat", messages: [user], model: "override" },
     { mode: "chat", intent: "image", messages: [{ ...user, parts: [{ type: "text", text: "x".repeat(501) }] }] }]) {
     assert.equal((await agent(request(body, cookie))).status, 400);
@@ -67,7 +68,7 @@ test("agent: obraz trafia do UI, a do modelu tylko tekst — również w kolejne
       headers: { "content-type": "text/event-stream" },
     });
   });
-  const cookie = `workshop-session=${await createSession(authConfig())}`;
+  const cookie = TEST_AUTH_COOKIE;
   const response = await agent(request({ mode: "chat", intent: "image", messages: [user] }, cookie));
   assert.equal(response.status, 200);
   const stream = await chunks(response);
@@ -137,7 +138,7 @@ test("agent: polecenie logo → obejrzenie przez vision → plakat z referencją
       headers: { "content-type": "text/event-stream" },
     });
   });
-  const cookie = `workshop-session=${await createSession(authConfig())}`;
+  const cookie = TEST_AUTH_COOKIE;
   const question = { id: "logo-user", role: "user", parts: [{ type: "text",
     text: "Znajdź logo LABA w internecie, upewnij się że to logo LABA opisując co widzisz, a potem zrób mi plakat drugiej edycji kursu AI Agents",
   }] };

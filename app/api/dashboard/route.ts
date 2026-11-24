@@ -1,8 +1,11 @@
-import { requestToken, validSession, sameOrigin } from '../../../lib/session';
+import { requestUser } from '../../../lib/supabase-server';
+import { sameOrigin } from '../../../lib/request-origin';
+import { AUTH_MESSAGES } from '../../../lib/auth-messages';
 import { travelDashboard, travelInput, compareDestinations } from '../../../lib/travel-dashboard';
 export const maxDuration = 65;
 export async function POST(request: Request) {
-  if (!(await validSession(requestToken(request)))) return Response.json({ error: 'Zaloguj się ponownie.' }, { status: 401 });
+  // Weryfikacja użytkownika przed odczytem danych i zapytaniami do zewnętrznych usług.
+  if (!(await requestUser(request))) return Response.json({ error: AUTH_MESSAGES.unauthorized }, { status: 401 });
   if (!sameOrigin(request)) return Response.json({ error: 'Niedozwolone źródło żądania.' }, { status: 403 });
   try {
     const input = travelInput.extend({ secondCity: travelInput.shape.city.optional() }).safeParse(await request.json());

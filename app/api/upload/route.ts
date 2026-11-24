@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { requestToken, sameOrigin, validSession } from "../../../lib/session";
+import { requestUser } from "../../../lib/supabase-server";
+import { sameOrigin } from "../../../lib/request-origin";
 import { AUTH_MESSAGES } from "../../../lib/auth-messages";
 import {
   deleteDocument, findDocumentsByTitle, KB_MESSAGES, KnowledgeBaseError, saveDocument, uploadSchema,
@@ -8,9 +9,8 @@ import {
 import type { UploadStreamEvent } from "../../../lib/upload-stream";
 
 async function authorize(request: Request) {
-  // Bramka sesji przed odczytem danych i przed bazą.
-  const token = requestToken(request);
-  if (!token || !await validSession(token)) return new Response(AUTH_MESSAGES.unauthorized, { status: 401 });
+  // Weryfikacja użytkownika przed odczytem danych i przed bazą.
+  if (!await requestUser(request)) return new Response(AUTH_MESSAGES.unauthorized, { status: 401 });
   if (!sameOrigin(request)) return new Response(AUTH_MESSAGES.origin, { status: 403 });
   return null;
 }

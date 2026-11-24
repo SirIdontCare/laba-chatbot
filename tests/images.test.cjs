@@ -10,12 +10,13 @@ require.extensions[".ts"] = (module, filename) => {
 };
 Object.assign(process.env, {
   NODE_ENV: "development", VERCEL: "", VERCEL_PROJECT_PRODUCTION_URL: "",
-  CHAT_PASSWORD: "test-workshop-password", SESSION_SECRET: "offline-test-secret-32-characters-long",
+  SESSION_SECRET: "offline-test-secret-32-characters-long",
   OPENROUTER_API_KEY: "offline-test-key", OPENROUTER_MODEL: "configured/vision-model",
 });
+const { installFakeAuth, TEST_AUTH_COOKIE } = require("./fake-auth.cjs");
+installFakeAuth();
 const { generujObraz } = require("../lib/image-generation.ts");
 const { POST: chat } = require("../app/api/agent/route.ts");
-const { createSession, authConfig } = require("../lib/session.ts");
 const { IMAGE_MESSAGES, MAX_PHOTO_BYTES, photoSelectionError } = require("../lib/image-input.ts");
 const { conversationForModel } = require("../lib/chat-message.ts");
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aShoAAAAASUVORK5CYII=";
@@ -23,7 +24,7 @@ const photo = { type: "file", mediaType: "image/png", filename: "test.png", url:
 const request = (path, body, cookie = "", origin = "http://localhost:3000") => new Request(`http://localhost:3000${path}`, {
   method: "POST", headers: { origin, "content-type": "application/json", cookie }, body: JSON.stringify(path === "/api/agent" ? { ...body, mode: "chat" } : body),
 });
-const sessionCookie = async () => `workshop-session=${await createSession(authConfig())}`;
+const sessionCookie = async () => TEST_AUTH_COOKIE;
 const userMessage = (parts) => ({ id: "media-user", role: "user", parts });
 const parseStream = async (response) => (await response.text()).split("\n")
   .filter((line) => line.startsWith("data: {")).map((line) => JSON.parse(line.slice(6)));

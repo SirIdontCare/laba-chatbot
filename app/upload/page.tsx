@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
-import { authConfig, sessionCookieName, validSession } from "../../lib/session";
+import { redirect } from "next/navigation";
+import { currentUser } from "../../lib/supabase-server";
 import { listDocuments } from "../../lib/knowledge-base";
-import LoginForm from "../login-form";
+import UserMenu from "../user-menu";
 import UploadForm from "./upload-form";
 import DeleteDocumentButton from "./delete-document-button";
 
@@ -13,15 +13,14 @@ function fragmentWord(count: number) {
 }
 
 export default async function UploadPage() {
-  const configured = Boolean(authConfig());
-  const token = (await cookies()).get(sessionCookieName())?.value;
-  // Lista dokumentów dopiero po sprawdzeniu sesji.
-  if (!configured || !token || !await validSession(token)) return <LoginForm configured={configured} />;
+  // Lista dokumentów dopiero po weryfikacji użytkownika.
+  const user = await currentUser();
+  if (!user) redirect("/login");
   let documents;
   try { documents = await listDocuments(); } catch { documents = null; }
   const format = new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Warsaw" });
   return <main className="chat">
-    <h1>Baza wiedzy</h1>
+    <header className="chat-header"><h1>Baza wiedzy</h1><UserMenu email={user.email} /></header>
     <Link href="/">Wróć do czatu</Link>
     <p>Wklej dokument. Każdy akapit (tekst oddzielony pustą linią) zostanie zapisany jako osobny fragment razem z embeddingiem do wyszukiwania.
       Dokument o tytule, który już jest w bazie, zastąpi poprzednią wersję (zapytam o potwierdzenie).</p>

@@ -1,9 +1,10 @@
-import { requestToken, sameOrigin, validSession } from "../../../lib/session";
+import { requestUser } from "../../../lib/supabase-server";
+import { sameOrigin } from "../../../lib/request-origin";
+import { AUTH_MESSAGES } from "../../../lib/auth-messages";
 import { editUserProfile, profileEditSchema } from "../../../lib/user-profile";
 
 export async function PATCH(request: Request) {
-  const token = requestToken(request);
-  if (!token || !await validSession(token)) return new Response("Zaloguj się ponownie.", { status: 401 });
+  if (!await requestUser(request)) return new Response(AUTH_MESSAGES.unauthorized, { status: 401 });
   if (!sameOrigin(request)) return new Response("Niedozwolone źródło.", { status: 403 });
   let input;
   try { input = profileEditSchema.safeParse(await request.json()); }

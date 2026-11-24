@@ -20,7 +20,7 @@ import { IMAGE_MESSAGES } from "./image-input";
 import { imageToolInputSchema } from "./image-tool-schema";
 import { createAgentTools } from "./agent-tools";
 import { AGENT_STEP_LIMIT } from "./tool-catalog";
-import { validSession } from "./session";
+import type { SignedInUser } from "./supabase-server";
 import { saveChatTurn } from "./chat-history";
 import { loadUserProfile, PROFILE_INSTRUCTIONS, profileFollowUp } from "./user-profile";
 
@@ -29,7 +29,7 @@ const turnIdSchema = z.uuid();
 export async function agentChat(
   request: Request,
   { messages: inputMessages, intent, chatId }: { messages: unknown; intent?: "image"; chatId?: string },
-  token: string,
+  user: SignedInUser,
 ) {
   const startedAt = Date.now();
   let toolCalls = 0;
@@ -37,9 +37,9 @@ export async function agentChat(
   const taskTimeout = AbortSignal.timeout(60_000);
   const taskSignal = AbortSignal.any([request.signal, taskTimeout]);
   let messages: ChatMessage[];
-  // Token pozostaje po stronie serwera; model nie wybiera przestrzeni notatek.
-  const scope = createHash("sha256").update(token).digest("hex");
-  const localTools = createAgentTools(scope, token, () => messages?.at(-1)?.parts
+  // Przestrzeń notatek wynika ze zweryfikowanej sesji logowania; model jej nie wybiera.
+  const scope = createHash("sha256").update(`${user.id}:${user.sessionId ?? ""}`).digest("hex");
+  const localTools = createAgentTools(scope, user.stillSignedIn, () => messages?.at(-1)?.parts
     .filter(part => part.type === "text").map(part => part.text).join(" ") ?? "",
     () => messages?.at(-2)?.role === "assistant" ? messages.at(-2)!.parts
       .filter(part => part.type === "text").map(part => part.text).join(" ") : "");
@@ -234,8 +234,8 @@ export async function agentChat(
       onEnd: chatId ? async ({ isAborted, isCancelled, outcome, finishReason, responseMessage }) => {
         if (isAborted || isCancelled || outcome.status !== "completed" || finishReason === "error") return;
         try {
-          if (!await validSession(token)) throw new Error("Session expired.");
-          await saveChatTurn(token, chatId, question, responseMessage);
+          if (!await user.stillSignedIn()) throw new Error("Session expired.");
+          await saveChatTurn(chatId, question, responseMessage, user.stillSignedIn);
         } catch {
           saveFailed = true;
         }

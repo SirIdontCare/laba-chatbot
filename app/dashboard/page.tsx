@@ -1,8 +1,8 @@
-import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { sessionCookieName, validSession } from '../../lib/session';
+import { currentUser } from '../../lib/supabase-server';
 import DashboardClient from './dashboard-client';
 export default async function Dashboard() {
-  if (!(await validSession((await cookies()).get(sessionCookieName())?.value))) redirect('/');
-  return <DashboardClient />;
+  const user = await currentUser();
+  if (!user) redirect('/login');
+  return <DashboardClient email={user.email} />;
 }

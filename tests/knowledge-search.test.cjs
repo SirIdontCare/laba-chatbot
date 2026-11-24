@@ -111,5 +111,5 @@ test('searchKnowledge jest w narzędziach czatu, ma plakietkę, opis i zasady w 
 
 test('endpoint agenta sprawdza sesję, zanim uruchomi czat z narzędziami', () => {
   const route = readFileSync(require.resolve('../app/api/agent/route.ts'), 'utf8');
-  assert.ok(route.indexOf('validSession(token)') < route.indexOf('agentChat(request'));
+  assert.ok(route.indexOf('requestUser(request)') < route.indexOf('agentChat(request'));
 });

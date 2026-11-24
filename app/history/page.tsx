@@ -1,19 +1,16 @@
 import Link from "next/link";
-import { cookies } from "next/headers";
-import { authConfig, sessionCookieName, validSession } from "../../lib/session";
+import { redirect } from "next/navigation";
+import { currentUser } from "../../lib/supabase-server";
 import { listChats } from "../../lib/chat-history";
-import LoginForm from "../login-form";
+import UserMenu from "../user-menu";
 import DeleteChatButton from "./delete-chat-button";
 
 export default async function HistoryPage() {
-  const configured = Boolean(authConfig());
-  const token = (await cookies()).get(sessionCookieName())?.value;
-  if (!configured || !token || !await validSession(token)) {
-    return <LoginForm configured={configured} />;
-  }
+  const user = await currentUser();
+  if (!user) redirect("/login");
   let chats;
   try {
-    chats = await listChats(token);
+    chats = await listChats();
   } catch {
     return <main className="chat"><h1>Historia</h1><p role="alert">Nie udało się wczytać historii. Odśwież stronę.</p><Link href="/">Wróć do czatu</Link></main>;
   }
@@ -22,7 +19,7 @@ export default async function HistoryPage() {
   });
   return (
     <main className="chat">
-      <header className="chat-header"><h1>Historia</h1><a className="secondary-button" href="/?new=1">Nowa rozmowa</a></header>
+      <header className="chat-header"><h1>Historia</h1><div className="header-actions"><a className="secondary-button" href="/?new=1">Nowa rozmowa</a><UserMenu email={user.email} /></div></header>
       <Link href="/">Wróć do czatu</Link>
       {chats.length === 0 ? <p>Od czego zaczynamy? Zadaj pytanie lub opisz zadanie — pomogę Ci znaleźć informacje i przejść do działania. Wybierz „Nowa rozmowa”.</p> : (
         <ul className="history-list">

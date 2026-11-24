@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { requestToken, validSession, sameOrigin } from "../../../lib/session";
+import { requestUser } from "../../../lib/supabase-server";
+import { sameOrigin } from "../../../lib/request-origin";
 import { AUTH_MESSAGES } from "../../../lib/auth-messages";
 import { agentChat } from "../../../lib/agent-chat";
 import { agentAnalyze, analysisFailure } from "../../../lib/agent-analyze";
@@ -10,11 +11,9 @@ const chatSchema = z.strictObject({
 });
 
 export async function POST(request: Request) {
-  // Wspólna bramka: przed odczytem JSON, konfiguracji i każdym modelem/narzędziem.
-  const token = requestToken(request);
-  if (!token || !(await validSession(token))) {
-    return new Response(AUTH_MESSAGES.unauthorized, { status: 401 });
-  }
+  // Wspólna bramka: weryfikacja użytkownika przed odczytem JSON, bazą i każdym modelem/narzędziem.
+  const user = await requestUser(request);
+  if (!user) return new Response(AUTH_MESSAGES.unauthorized, { status: 401 });
   if (!sameOrigin(request)) return new Response(AUTH_MESSAGES.origin, { status: 403 });
   let body: unknown;
   try {
@@ -32,7 +31,7 @@ export async function POST(request: Request) {
   if (body.mode === "chat") {
     const input = chatSchema.safeParse(body);
     if (!input.success) return new Response("Nieprawidłowe dane rozmowy.", { status: 400 });
-    return agentChat(request, input.data, token);
+    return agentChat(request, input.data, user);
   }
   return new Response("Wybierz tryb chat lub analyze.", { status: 400 });
 }

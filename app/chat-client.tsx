@@ -14,6 +14,7 @@ import { IMAGE_MESSAGES, isPhotoType, photoSelectionError } from "../lib/image-i
 import { imageToolInputSchema, imageToolOutputSchema, inspectionOutputSchema } from "../lib/image-tool-schema";
 import { usedKnowledgeFragments } from "../lib/knowledge-schema";
 import KnowledgeSources from "./knowledge-sources";
+import UserMenu from "./user-menu";
 
 const transport = new DefaultChatTransport<ChatMessage>({
   api: "/api/agent",
@@ -47,10 +48,11 @@ function readPhoto(file: File): Promise<FileUIPart> {
   });
 }
 
-export default function ChatClient({ initialChat, historyError, profileName }: {
+export default function ChatClient({ initialChat, historyError, profileName, email }: {
   initialChat: { id: string; messages: ChatMessage[] };
   historyError?: string;
   profileName?: string | null;
+  email: string | null;
 }) {
   const chatId = useRef(initialChat.id);
   useEffect(() => {
@@ -60,7 +62,6 @@ export default function ChatClient({ initialChat, historyError, profileName }: {
   const [analysisBusy, setAnalysisBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [leaving, setLeaving] = useState(false);
-  const [logoutError, setLogoutError] = useState("");
   const [photo, setPhoto] = useState<FileUIPart>();
   const [readingPhoto, setReadingPhoto] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -73,7 +74,7 @@ export default function ChatClient({ initialChat, historyError, profileName }: {
     messages: initialChat.messages,
     generateId: () => crypto.randomUUID(),
     onError: (failure) => {
-      if (failure.message === AUTH_MESSAGES.unauthorized) window.location.replace("/");
+      if (failure.message === AUTH_MESSAGES.unauthorized) window.location.replace("/login");
     },
   });
   const conversation = useRef<HTMLDivElement>(null);
@@ -144,19 +145,10 @@ export default function ChatClient({ initialChat, historyError, profileName }: {
     window.location.assign("/?new=1");
   }
 
-  async function logout() {
-    setLeaving(true);
-    setLogoutError("");
-    try {
-      await stop();
-      const response = await fetch("/api/auth/logout", { method: "POST" });
-      if (!response.ok) throw new Error();
-      setMessages([]);
-      window.location.replace("/");
-    } catch {
-      setLogoutError("Nie udało się wyjść. Spróbuj ponownie.");
-      setLeaving(false);
-    }
+  // Przed wylogowaniem przerywamy odbieranie odpowiedzi i czyścimy rozmowę w tej karcie.
+  async function beforeLogout() {
+    await stop();
+    setMessages([]);
   }
 
   async function stopTask() {
@@ -183,11 +175,8 @@ export default function ChatClient({ initialChat, historyError, profileName }: {
             <p className="header-description">Rozmawiaj, odkrywaj i twórz z pomocą AI.</p></div>
         </div>
         <div className="header-actions"><a href="/profile">Profil</a><a href="/history">Historia</a><a href="/upload">Baza wiedzy</a><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
-        <button className="secondary-button" type="button" onClick={logout} disabled={leaving}>
-          {leaving ? "Wychodzę…" : "Wyjdź"}
-        </button></div>
+        <UserMenu email={email} onBeforeLogout={beforeLogout} onLeavingChange={setLeaving} /></div>
       </header>
-      {logoutError && <p className="error" role="alert">{logoutError}</p>}
       <nav className="mode-switch" aria-label="Tryb pracy">
         <button type="button" aria-pressed={mode === "chat"} onClick={() => setMode("chat")} disabled={waiting || analysisBusy || leaving}>Zwykły czat</button>
         <button type="button" aria-pressed={mode === "analysis"} onClick={() => setMode("analysis")} disabled={waiting || analysisBusy || leaving}>Analiza JSON</button>

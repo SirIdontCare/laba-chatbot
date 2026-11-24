@@ -8,8 +8,11 @@ require.extensions['.ts'] = (module, filename) => {
   }).outputText, filename);
 };
 Object.assign(process.env, { NODE_ENV: 'development', VERCEL: '', VERCEL_PROJECT_PRODUCTION_URL: '',
-  CHAT_PASSWORD: 'tools-test-password', SESSION_SECRET: 'tools-offline-session-secret-32-characters',
+  SESSION_SECRET: 'tools-offline-session-secret-32-characters',
+  NEXT_PUBLIC_SUPABASE_URL: 'https://tools-test.supabase.co', NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_tools_test',
   OPENROUTER_API_KEY: 'fake-secret-never-return', OPENROUTER_MODEL: 'test/tools-model' });
+const { installFakeAuth, TEST_AUTH_COOKIE } = require('./fake-auth.cjs');
+installFakeAuth();
 const { fetchCurrency, currencyInputSchema } = require('../lib/currency-tool.ts');
 const { fetchHolidays, holidaysInputSchema } = require('../lib/holidays-tool.ts');
 const { fetchWikipedia, wikipediaInputSchema } = require('../lib/wikipedia-tool.ts');
@@ -19,7 +22,6 @@ const { czas, warsawTime } = require('../lib/chat-tools.ts');
 const { createAgentTools } = require('../lib/agent-tools.ts');
 const { TOOL_LABELS, AGENT_STEP_LIMIT } = require('../lib/tool-catalog.ts');
 const { POST: chat } = require('../app/api/agent/route.ts');
-const { authConfig, createSession } = require('../lib/session.ts');
 const options = { toolCallId: 'test', messages: [] };
 const request = (body, cookie = '') => new Request('http://localhost:3000/api/agent', {
   method: 'POST', headers: { origin: 'http://localhost:3000', 'content-type': 'application/json', cookie },
@@ -187,11 +189,6 @@ test('notatki: zapis i odczyt między żądaniami, izolacja sesji, walidacja i l
   assert.equal((await first.execute({ akcja: 'pokaz' }, options)).notatki.length, 100);
 });
 
-test('sesje logowania mają różne identyfikatory nawet w tej samej sekundzie', async () => {
-  const [a, b] = await Promise.all([createSession(authConfig()), createSession(authConfig())]);
-  assert.notEqual(a, b);
-});
-
 test('diagnostyka: zgodność z rejestrem, etykiety, limit i brak wartości sekretów', async () => {
   const tools = createAgentTools('diagnostic-test');
   const out = await tools.diagnostyka.execute({}, options);
@@ -200,7 +197,7 @@ test('diagnostyka: zgodność z rejestrem, etykiety, limit i brak wartości sekr
   assert.equal(out.limitKrokow, AGENT_STEP_LIMIT); assert.equal(out.model, 'test/tools-model'); assertTimestamp(out);
   for (const value of Object.values(out.zmienne)) assert.equal(value, 'tak');
   const json = JSON.stringify(out);
-  for (const key of ['OPENROUTER_API_KEY', 'CHAT_PASSWORD', 'SESSION_SECRET']) assert.equal(json.includes(process.env[key]), false);
+  for (const key of ['OPENROUTER_API_KEY', 'SESSION_SECRET']) assert.equal(json.includes(process.env[key]), false);
   const before = process.env.OPENROUTER_API_KEY;
   try { delete process.env.OPENROUTER_API_KEY;
     assert.equal((await createDiagnosticsTool([], 12).execute({}, options)).zmienne.OPENROUTER_API_KEY, 'nie');
@@ -241,7 +238,7 @@ test('nowe narzędzia: model → funkcja/API → UI → kolejna tura, bez prawdz
           tool_calls: [{ index: 0, id: `${name}-call`, type: 'function', function: { name, arguments: JSON.stringify(input) } }] }, 'tool_calls');
         return sse({ role: 'assistant', content: 'Gotowe.' }, 'stop');
       });
-      const cookie = `workshop-session=${await createSession(authConfig())}`;
+      const cookie = TEST_AUTH_COOKIE;
       const user = { id: 'user', role: 'user', parts: [{ type: 'text', text: 'Wykonaj zadanie.' }] };
       const response = await chat(request({ messages: [user] }, cookie)); assert.equal(response.status, 200);
       const chunks = (await response.text()).split('\n').filter((l) => l.startsWith('data: {')).map((l) => JSON.parse(l.slice(6)));
@@ -279,7 +276,7 @@ test('notatki: zapis i pokazanie notatki o lotach przez prawdziwy endpoint i SDK
     }
     return sse({ role: 'assistant', content: 'Zapisano. Notatki: sprawdzić ceny lotów do Lizbony.' }, 'stop');
   });
-  const cookie = `workshop-session=${await createSession(authConfig())}`;
+  const cookie = TEST_AUTH_COOKIE;
   const user = { id: 'note-request', role: 'user', parts: [{ type: 'text', text: 'Zapisz notatkę: sprawdzić ceny lotów do Lizbony. Potem pokaż wszystkie notatki.' }] };
   const response = await chat(request({ messages: [user] }, cookie));
   const chunks = (await response.text()).split('\n').filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)));
@@ -316,7 +313,7 @@ test('ReAct: limit narzędzi zatrzymuje zadanie przed limitem 18 kroków', async
     return sse({ role: 'assistant', content: null, tool_calls: [{ index: 0, id: `calc-${count}`, type: 'function',
       function: { name: 'kalkulator', arguments: JSON.stringify({ dzialanie: 'dodaj', a: count, b: 1 }) } }] }, 'tool_calls');
   });
-  const cookie = `workshop-session=${await createSession(authConfig())}`;
+  const cookie = TEST_AUTH_COOKIE;
   const response = await chat(request({ messages: [{ id: 'loop', role: 'user', parts: [{ type: 'text', text: 'Wykonaj serię obliczeń.' }] }] }, cookie));
   const chunks = (await response.text()).split('\n').filter((line) => line.startsWith('data: {')).map((line) => JSON.parse(line.slice(6)));
   assert.equal(count, 16);
@@ -360,7 +357,7 @@ test('dashboard: ochrona sesją i origin oraz pięć kart z częściowym błęde
     throw new Error('Nieoczekiwany host');
   });
   assert.equal((await dashboard(req())).status, 401); assert.equal(calls, 0);
-  const cookie = `workshop-session=${await createSession(authConfig())}`;
+  const cookie = TEST_AUTH_COOKIE;
   assert.equal((await dashboard(req(cookie, 'https://obca.example'))).status, 403); assert.equal(calls, 0);
   const key = process.env.OPENROUTER_API_KEY;
   try {

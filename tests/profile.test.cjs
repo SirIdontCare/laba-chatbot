@@ -6,10 +6,11 @@ require.extensions[".ts"] = (module, filename) => module._compile(ts.transpileMo
   compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
 }).outputText, filename);
 Object.assign(process.env, {
-  CHAT_PASSWORD: "profile-test", SESSION_SECRET: "profile-test-secret-at-least-32-characters",
+  SESSION_SECRET: "profile-test-secret-at-least-32-characters",
   SUPABASE_URL: "https://profile.test", SUPABASE_SECRET_KEY: "offline-test",
 });
-const { createSession, authConfig } = require("../lib/session.ts");
+const { installFakeAuth, TEST_AUTH_COOKIE } = require("./fake-auth.cjs");
+installFakeAuth();
 const { createProfileTool, loadUserProfile } = require("../lib/user-profile.ts");
 
 test("profil zachowuje polską odmianę i toleruje wielkość liter cytatu", async t => {
@@ -24,9 +25,8 @@ test("profil zachowuje polską odmianę i toleruje wielkość liter cytatu", asy
     }
     return Response.json([stored]);
   });
-  const token = await createSession(authConfig());
   let source = "Cześć jestem Paweł. Lubię pizzę.";
-  const tool = createProfileTool(token, () => source);
+  const tool = createProfileTool(async () => true, () => source);
   const options = { toolCallId: "profile", messages: [] };
   const result = await tool.execute({
     name: { value: "Paweł", quote: "jestem Paweł" },
@@ -77,12 +77,11 @@ test("edycja profilu: sesja, origin, zmiana imienia, pojedynczy fakt i czyszczen
     return Response.json([structuredClone(stored)]);
   });
   const { PATCH } = require("../app/api/profile/route.ts");
-  const token = await createSession(authConfig());
   const request = (body, cookie = "", origin = "http://localhost:3000") => new Request("http://localhost:3000/api/profile", {
     method: "PATCH", headers: { cookie, origin, "content-type": "application/json" }, body: JSON.stringify(body),
   });
   assert.equal((await PATCH(request({ action: "clear" }))).status, 401);
-  const cookie = "workshop-session=" + token;
+  const cookie = TEST_AUTH_COOKIE;
   assert.equal((await PATCH(request({ action: "clear" }, cookie, "https://other.test"))).status, 403);
   assert.equal(calls, 0);
   assert.equal((await PATCH(request({ action: "name", value: "Paweł" }, cookie))).status, 204);
@@ -103,13 +102,12 @@ test("wyliczenie czterech preferencji zapisuje cztery krótkie wartości", async
     writes.push(JSON.parse(options.body));
     return new Response(null, { status: 204 });
   });
-  const token = await createSession(authConfig());
   const source = "lubie jazdę na rowerze, pizze kanadyjską, grę na gitarze oraz kodowanie agentyczne";
   const preferences = {
     ulubiona_pizza: "pizza kanadyjska", hobby_kodowanie: "kodowanie agentyczne",
     hobby_gra_na_gitarze: "gra na gitarze", hobby_jazda_na_rowerze: "jazda na rowerze",
   };
-  const tool = createProfileTool(token, () => source);
+  const tool = createProfileTool(async () => true, () => source);
   const result = await tool.execute({ preferences: Object.fromEntries(
     Object.entries(preferences).map(([key, value]) => [key, { value, quote: source }]),
   ) }, { toolCallId: "list", messages: [] });
@@ -128,9 +126,8 @@ test("krótkie cytaty w wyliczeniu dziedziczą deklarację lubię z tego samego 
     writes.push(JSON.parse(options.body));
     return new Response(null, { status: 204 });
   });
-  const token = await createSession(authConfig());
   let source = "lubię włochy, prowdzić kursy, jeżdzić na wycieczki oraz trening siłowy";
-  const tool = createProfileTool(token, () => source);
+  const tool = createProfileTool(async () => true, () => source);
   const preferences = {
     ulubiony_kraj: { value: "Włochy", quote: "włochy" },
     hobby_kursy: { value: "prowadzić kursy", quote: "prowdzić kursy" },
@@ -160,10 +157,9 @@ test("trzy preferencje: pytania o braki i zapis krótkich odpowiedzi w kontekśc
     writes.push(JSON.parse(options.body));
     return new Response(null, { status: 204 });
   });
-  const token = await createSession(authConfig());
   let source = "Kraków";
   let previous = "W jakim mieście mieszkasz?";
-  const tool = createProfileTool(token, () => source, () => previous);
+  const tool = createProfileTool(async () => true, () => source, () => previous);
   for (const [key, value, question] of [
     ["miasto", "Kraków", "W jakim mieście mieszkasz?"],
     ["ulubione_danie", "pierogi", "Jakie jest Twoje ulubione danie?"],

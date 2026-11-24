@@ -9,14 +9,15 @@ require.extensions['.ts'] = (module, filename) => {
 };
 // Wszystkie adresy i klucze są fałszywe; każdy fetch jest atrapą, nic nie trafia do OpenRouter ani Supabase.
 Object.assign(process.env, { NODE_ENV: 'development', VERCEL: '', VERCEL_PROJECT_PRODUCTION_URL: '',
-  CHAT_PASSWORD: 'kb-test-password', SESSION_SECRET: 'kb-offline-session-secret-32-characters!',
+  SESSION_SECRET: 'kb-offline-session-secret-32-characters!',
   OPENROUTER_API_KEY: 'fake-openrouter-key', OPENROUTER_EMBEDDING_MODEL: 'test/embedding-model',
   SUPABASE_URL: 'http://supabase.test', SUPABASE_SECRET_KEY: 'fake-supabase-key' });
+const { installFakeAuth, TEST_AUTH_COOKIE } = require('./fake-auth.cjs');
+installFakeAuth();
 const { saveDocument, listDocuments, KB_MESSAGES, BACKFILL_LIMIT } = require('../lib/knowledge-base.ts');
 const { readUploadEvents, STAGE_LABELS } = require('../lib/upload-stream.ts');
 const { EMBEDDING_DIMENSIONS } = require('../lib/model.ts');
 const { POST: upload, DELETE: remove } = require('../app/api/upload/route.ts');
-const { authConfig, createSession } = require('../lib/session.ts');
 
 const vector = (seed) => Array.from({ length: EMBEDDING_DIMENSIONS }, (_, i) => (seed + i) / 10_000);
 
@@ -97,7 +98,7 @@ async function fakeFetch(input, init = {}) {
   throw new Error(`nieobsłużone ${method} ${url}`);
 }
 
-const cookie = async () => `workshop-session=${await createSession(authConfig())}`;
+const cookie = async () => TEST_AUTH_COOKIE;
 const uploadRequest = async (body) => new Request('http://localhost:3000/api/upload', {
   method: 'POST', body: JSON.stringify(body), headers: { origin: 'http://localhost:3000',
     'content-type': 'application/json', cookie: await cookie() },

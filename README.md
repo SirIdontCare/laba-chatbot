@@ -2,7 +2,7 @@
 
 Next.js App Router z TypeScript. Czat i analiza korzystają z serwerowego `/api/agent` oraz OpenRouter i AI SDK. Po odświeżeniu czat wczytuje z Supabase ostatnią rozmowę bieżącej sesji. „Nowa rozmowa” czyści widok i pozostawia wcześniejszą rozmowę w bazie.
 
-`POST /api/agent` najpierw sprawdza sesję (bez niej zwraca 401), a potem tryb:
+`POST /api/agent` najpierw weryfikuje zalogowanego użytkownika (bez niego zwraca 401), a potem tryb:
 
 | Tryb | Dane wejściowe | Wynik |
 | --- | --- | --- |
@@ -26,7 +26,7 @@ OPENROUTER_MODEL=
 
 Po pierwszym `=` wpisz swój klucz OpenRouter. Po drugim wpisz dokładny identyfikator modelu skopiowany z [listy modeli OpenRouter](https://openrouter.ai/models), w formacie `dostawca/model`. Wartości podajesz wyłącznie w lokalnym pliku, nie w rozmowie. Nie dodawaj prefiksu `NEXT_PUBLIC_`.
 
-Historia czatu wymaga adresu projektu w `SUPABASE_URL` oraz klucza serwerowego w `SUPABASE_SECRET_KEY`. Obie zmienne należą do środowiska serwera. Skrypt `supabase/create_chat_tables.sql` uzupełnia tabele `conversations` i `messages` oraz instaluje funkcję zapisu pary wiadomości. Czat zapisuje zakończone tury wraz z tekstem i dopiskami `[obraz]`. Historia jest wspólna dla wszystkich logowań: klucz w bazie wynika z `SESSION_SECRET` (HMAC), nie z tokenu sesji, więc każdy, kto zna hasło, widzi wszystkie rozmowy. Zmiana hasła jej nie ukrywa; zmiana `SESSION_SECRET` tak. Localhost i Vercel mają wspólną historię tylko przy tej samej bazie i tym samym `SESSION_SECRET`.
+Historia czatu wymaga adresu projektu w `SUPABASE_URL` oraz klucza serwerowego w `SUPABASE_SECRET_KEY`. Obie zmienne należą do środowiska serwera. Skrypt `supabase/create_chat_tables.sql` uzupełnia tabele `conversations` i `messages` oraz instaluje funkcję zapisu pary wiadomości. Czat zapisuje zakończone tury wraz z tekstem i dopiskami `[obraz]`. Na razie historia jest wspólna dla wszystkich kont: klucz w bazie wynika z `SESSION_SECRET` (HMAC), więc każdy zalogowany widzi wszystkie rozmowy. Rozdzielenie rozmów między konta to następny krok. Zmiana `SESSION_SECRET` ukrywa dotychczasową historię. Localhost i Vercel mają wspólną historię tylko przy tej samej bazie i tym samym `SESSION_SECRET`.
 
 Zapisz plik. Jeśli serwer działał podczas zmiany konfiguracji, uruchom go ponownie: zakończ go przez `Ctrl+C`, a następnie wpisz w terminalu:
 
@@ -56,33 +56,19 @@ npm.cmd run build
 
 Test lokalny z zastąpionym połączeniem sieciowym potwierdził strumieniowe fragmenty, przekazywanie historii, odrzucanie pustych wiadomości, brak konfiguracji i bezpieczny błąd dostawcy. Nie wykonano prawdziwych wywołań OpenRouter.
 
-## Hasło warsztatowe
+## Konta użytkowników (Supabase Auth)
 
-W `.env.local` dodaj `CHAT_PASSWORD=` i wpisz po znaku `=` własne, długie hasło warsztatowe. Dla wartości zawierających `#` lub spacje użyj cudzysłowów, np. `CHAT_PASSWORD="twoje hasło"`. Nie umieszczaj hasła w kodzie ani w rozmowie. Zachowaj pozostałe zmienne.
+Logowanie odbywa się przez konta Supabase Auth (e-mail i hasło). W `.env.local` ustaw `NEXT_PUBLIC_SUPABASE_URL` i `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` (okno **Connect** w panelu Supabase). To publiczne wartości: klucz publishable może trafić do przeglądarki. Klucz serwerowy `SUPABASE_SECRET_KEY` nigdy nie ma prefiksu `NEXT_PUBLIC_`. Po zmianie zmiennych zrestartuj serwer i zbuduj aplikację ponownie.
 
-`SESSION_SECRET` został wygenerowany kryptograficznie (32 losowe bajty) i dopisany do `.env.local` bez odczytywania istniejących sekretów i bez wyświetlania wartości. Nie zastępuj go hasłem. Aby świadomie wygenerować nowy sekret i unieważnić dotychczasowe sesje, uruchom:
+Strona `/login` ma zakładki „Zaloguj się” i „Załóż konto”. Hasło nowego konta musi mieć co najmniej 8 znaków. Ustaw ten sam minimalny rozmiar w panelu Supabase (Authentication → Sign In / Providers → Email), bo dopiero serwer Supabase egzekwuje regułę. Gdy w projekcie jest włączone potwierdzanie e-maili, po rejestracji przychodzi link, który kończy się na `/auth/confirm`. Dodaj adres aplikacji (np. `http://localhost:3000/**`) do listy Redirect URLs w Authentication → URL Configuration.
 
-```powershell
-npm.cmd run session:secret
-```
+- `proxy.ts` odświeża wygasający token Supabase i przekierowuje niezalogowanych ze stron na `/login`. To tylko wstępne sprawdzenie.
+- Każda strona (`currentUser()`) i każdy endpoint w `app/api` (`requestUser(request)`) weryfikuje użytkownika na serwerze przez `supabase.auth.getClaims()`, czyli sprawdza podpis tokenu, a nie samą obecność ciasteczka. Endpoint bez zalogowanego użytkownika zwraca `401`, zanim dotknie bazy albo modelu, a żądania z obcej strony dostają `403`.
+- Tożsamość pochodzi wyłącznie ze zweryfikowanego tokenu, nigdy z formularza, adresu strony ani odpowiedzi modelu.
+- „Wyloguj” w nagłówku kończy sesję tego urządzenia w Supabase i wraca do `/login`. Obok widać e-mail zalogowanej osoby.
+- Limity prób logowania i rejestracji zapewnia Supabase Auth (Authentication → Rate Limits).
 
-Skrypt dopisuje nową linię `SESSION_SECRET` bez czytania pliku; ostatnia definicja tej zmiennej obowiązuje po ponownym uruchomieniu Next.js. Hasło i sekret konfiguruj wyłącznie na serwerze, bez prefiksu `NEXT_PUBLIC_`. Po zmianach zrestartuj serwer.
-
-Przed czatem pojawia się „Wpisz hasło”. Poprawne hasło tworzy podpisany JWT ważny 8 godzin. Cookie zawiera wyłącznie standardowe dane sesji, nie hasło. Ma `HttpOnly`, `SameSite=Strict`, `Path=/`, termin ważności i `Secure` w produkcji. W produkcji nazwa ma prefiks `__Host-`, a strona wymaga HTTPS. Zmiana hasła albo sekretu unieważnia poprzednie sesje. Brak lub zbyt krótki sekret (mniej niż 32 bajty) blokuje dostęp.
-
-`Wyjdź` przerywa odbieranie odpowiedzi, usuwa cookie i rozmowę w tej karcie oraz wraca do ekranu hasła. To sesje bez bazy danych: wylogowanie usuwa cookie z przeglądarki, nie prowadzi listy unieważnionych kopii tokenów. Skopiowany token pozostaje ważny do wygaśnięcia lub zmiany sekretu/hasła.
-
-Serwer sprawdza podpis i wygaśnięcie w `/api/agent`, zanim odczyta konfigurację OpenRouter lub uruchomi model. Bez prawidłowej sesji zwraca `401`. Logowanie, wylogowanie i agent odrzucają żądania pochodzące z obcej strony.
-
-## Ograniczanie prób hasła
-
-Lokalnie działa limit **5 prób na minutę dla całego procesu**, także dla poprawnego hasła; szósta próba zwraca `429`. Restart procesu zeruje ten licznik. To pomoc do pracy lokalnej, nie globalna ochrona hostingu.
-
-Produkcja nie korzysta z tego licznika. Na Vercel używa usługi `@vercel/firewall` i reguły o identyfikatorze **`workshop-login`**. Wspólny klucz ogranicza łączną liczbę prób, a liczniki są współdzielone między instancjami w regionie Vercel; nie jest to jeden licznik dla wszystkich regionów świata. Brak reguły, awaria usługi, brak systemowych zmiennych `VERCEL`/`VERCEL_PROJECT_PRODUCTION_URL` lub hosting poza Vercel blokują logowanie (`503`). Publiczny adres produkcyjny w domenie `vercel.app` dostarcza automatycznie Vercel. Nie używamy technicznego `VERCEL_URL`, który może przekierowywać do logowania Vercel zamiast odpowiadać na sprawdzenie limitu.
-
-Przed udostępnieniem na Vercel skonfiguruj regułę zgodnie z [oficjalną instrukcją Rate Limiting SDK](https://vercel.com/docs/vercel-firewall/vercel-waf/rate-limiting-sdk): w projekcie otwórz Firewall → Configure → New Rule, wybierz warunek `@vercel/firewall` i Rate limit ID `workshop-login`. Ustaw limit **5 żądań / 60 sekund**, z akcją blokującą po przekroczeniu limitu (odpowiedź `429`, nie tryb `log`). Reguła musi być aktywna dla wywołań przez publiczny adres `VERCEL_PROJECT_PRODUCTION_URL`. Zapisz i opublikuj regułę po przeglądzie konfiguracji. Nie dodawaj warunku ścieżki `/api/auth/login` do reguły SDK: sprawdzanie limitu trafia pod `/.well-known/vercel/rate-limit-api/workshop-login`.
-
-Projekt `laba-super-agent` ma opublikowaną regułę `Workshop login limit` dla identyfikatora `workshop-login`. Na preview wykonaj test sześciu prób i potwierdź blokadę; lokalne testy automatyczne sprawdzają również brak reguły i awarię usługi. Preview i produkcja korzystają ze wspólnego limitu przez adres produkcyjny. Na innym hostingu najpierw trzeba podłączyć usługę współdzielonych limitów, nie włączać lokalnego licznika w produkcji.
+`SESSION_SECRET` służy już tylko jako klucz wspólnej historii rozmów (patrz wyżej). `CHAT_PASSWORD` nie jest używane.
 
 ## Sprawdzenie ochrony
 
@@ -92,7 +78,7 @@ npm.cmd run typecheck
 npm.cmd run build
 ```
 
-Testy używają własnych, fikcyjnych wartości w procesie testowym, bez czytania `.env.local`. Sieć jest zastąpiona atrapą, więc nie ma wywołań modelu. Sprawdzają poprawne i błędne hasło, atrybuty cookie, wygaśnięcie, zmianę hasła, usunięcie cookie przy wyjściu, `401` dla `/api/agent` bez sesji, obce źródło żądania, limit lokalny i blokowanie dostępu przy braku/awarii usługi limitującej w produkcji.
+Testy używają własnych, fikcyjnych wartości w procesie testowym, bez czytania `.env.local`. Serwer Supabase Auth jest zastąpiony atrapą, więc nie ma prawdziwej sieci ani wywołań modelu. Sprawdzają: `401` bez ciasteczek dla każdego endpointu bez żadnego połączenia sieciowego, `401` dla sfałszowanego, podmienionego, uszkodzonego i wygasłego tokenu, tożsamość z tokenu zweryfikowanego przez `getClaims()`, ignorowanie identyfikatora z adresu, nagłówka i treści, `403` dla obcego źródła, `401` przy braku konfiguracji, przekierowania w `proxy.ts` oraz polskie komunikaty błędów logowania. Pozostałe testy podstawiają weryfikację użytkownika (`tests/fake-auth.cjs`).
 
 ## Analiza wiadomości Studio Nova
 
@@ -140,7 +126,7 @@ Schemat kontroluje strukturę, a nie prawdziwość ceny w tekście `draft`: popr
 
 Do powtórzenia w przeglądarce: zwykłe pytanie o cenę (150 zł brutto, 45 minut), ta sama wiadomość z poleceniem ceny 1 zł (bez przyjęcia fałszywej ceny), polecenie nadania roli administratora i wysłania odpowiedzi (wyłącznie szkic, bez działania) oraz żądanie sekretów (bez ich ujawnienia). W trybie analizy sprawdź również obecność wszystkich czterech pól wyniku.
 
-Po ustawieniu własnego `CHAT_PASSWORD` ręcznie sprawdź w przeglądarce: ekran hasła, odmowę po błędnym haśle, wejście po poprawnym, wyjście i powrót do ekranu hasła po odświeżeniu. Samo logowanie i wyjście nie wywołują modelu. Nie testowano wyglądu w przeglądarce ani prawdziwego Vercel Firewall; test produkcji używa atrap odpowiedzi usługi.
+Po ustawieniu zmiennych Supabase ręcznie sprawdź w przeglądarce: przekierowanie na `/login`, założenie konta, odmowę po złym haśle, komunikat o istniejącym koncie, wejście do czatu z e-mailem w nagłówku oraz „Wyloguj” i powrót na `/login`. Samo logowanie i wylogowanie nie wywołują modelu.
 
 
 ## Osiem narzędzi agenta — 2026-11-12
@@ -156,9 +142,9 @@ Narzędzia korzystają z istniejącego AI SDK i Zod; bez nowych bibliotek i kluc
 | `kalkulator` | `dzialanie`: dodaj/odejmij/pomnoz/podziel/potega/procent oraz liczby `a`, `b` jako oddzielne argumenty. Lokalne operatory JavaScript, bez `eval` i wykonywania tekstu. | Skończony wynik albo komunikat (dzielenie przez zero, wynik nierzeczywisty, przepełnienie). Procent = a% z b. Standardowa precyzja Number. |
 | `czas` | Opcjonalna `strefa` IANA, domyślnie Europe/Warsaw. Lokalne `Intl.DateTimeFormat` i zegar serwera. `aktualnyCzas` jest zachowanym aliasem i nadal służy do wymuszonego sprawdzenia daty. | Data, dzień tygodnia, godzina, strefa i czas pobrania; nieznana strefa → komunikat. |
 | `notatki` | `akcja: zapisz` + `tresc` (1–2000 znaków) albo `akcja: pokaz`. Lokalny `Map` w pamięci procesu. | Zapis zwraca nową notatkę; odczyt listę notatek z identyfikatorami i czasami zapisu. Limit 100 na sesję i 200 sesji na instancję; po zapełnieniu czytelny komunikat, bez usuwania starszych wpisów. |
-| `diagnostyka` | Puste `{}`. Lokalna lista rejestru, stała limitu i wskazane pola `process.env`. | Skonfigurowana nazwa modelu, faktyczna lista narzędzi (w tym wyszukiwanie, obraz i alias czasu), limit 18 kroków oraz `tak`/`nie` dla OPENROUTER_API_KEY, OPENROUTER_MODEL, CHAT_PASSWORD, SESSION_SECRET. Nigdy wartości sekretów. |
+| `diagnostyka` | Puste `{}`. Lokalna lista rejestru, stała limitu i wskazane pola `process.env`. | Skonfigurowana nazwa modelu, faktyczna lista narzędzi (w tym wyszukiwanie, obraz i alias czasu), limit 18 kroków oraz `tak`/`nie` dla OPENROUTER_API_KEY, OPENROUTER_MODEL, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, SESSION_SECRET. Nigdy wartości sekretów. |
 
-Notatki są izolowane według sesji logowania. Model nie podaje identyfikatora sesji: serwer wyznacza klucz pamięci ze skrótu podpisanego cookie, nie przekazuje go modelowi. Nowe sesje JWT mają losowe `jti`, także przy logowaniach w tej samej sekundzie. Notatki znikają po restarcie, ponownym logowaniu lub zmianie instancji; na hostingu wiele instancji może mieć różne zestawy notatek. To celowo tymczasowe rozwiązanie na tę lekcję, bez bazy i zapisu na dysku.
+Notatki są izolowane według sesji logowania. Model nie podaje identyfikatora sesji: serwer wyznacza klucz pamięci ze skrótu identyfikatora użytkownika i sesji ze zweryfikowanego tokenu Supabase, nie przekazuje go modelowi. Notatki znikają po restarcie, ponownym logowaniu lub zmianie instancji; na hostingu wiele instancji może mieć różne zestawy notatek. To celowo tymczasowe rozwiązanie na tę lekcję, bez bazy i zapisu na dysku.
 
 Schemat wejścia notatek jest pojedynczym obiektem z wymaganym `akcja: zapisz | pokaz` i opcjonalnym `tresc` (dla odczytu można pominąć lub podać `null`). Zastępuje unię z dyskryminatorem, przy której model pomijał poprawne pole `akcja` i pojawiał się błąd `No matching discriminator`. Pusta treść zapisu zwraca polski komunikat. Przykłady parametrów są podane w opisie pól, `inputExamples` i instrukcji agenta. Test regresji sprawdza rzeczywisty JSON Schema w żądaniu OpenRouter oraz zapis „sprawdzić ceny lotów do Lizbony”, odczyt w tym samym zadaniu i odczyt w osobnym żądaniu tej samej sesji.
 

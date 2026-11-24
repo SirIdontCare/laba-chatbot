@@ -5,18 +5,17 @@ import { imageToolOutputSchema, inspectionOutputSchema } from "./image-tool-sche
 import { getSupabase } from "./supabase";
 import { generateText } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { validSession } from "./session";
 
-export async function deleteChat(token: string, chatId: string) {
+export async function deleteChat(chatId: string) {
   const { error } = await getSupabase().rpc("delete_chat", {
-    p_session_scope: sessionScope(token), p_chat_id: chatId,
+    p_session_scope: sessionScope(), p_chat_id: chatId,
   }).abortSignal(AbortSignal.timeout(10_000));
   if (error) throw new Error("Supabase delete failed.");
 }
 
-async function titleFirstTurn(token: string, chatId: string, question: string, answer: string) {
+async function titleFirstTurn(chatId: string, question: string, answer: string, stillSignedIn: () => Promise<boolean>) {
   const db = getSupabase();
-  const scope = sessionScope(token);
+  const scope = sessionScope();
   const { data: chat, error } = await db.from("conversations")
     .select("id,title,messages(count)").eq("session_scope", scope).eq("chat_id", chatId).single();
   if (error || !chat || chat.messages[0]?.count !== 2) return;
@@ -29,7 +28,7 @@ async function titleFirstTurn(token: string, chatId: string, question: string, a
   const title = result.text.trim().replace(/^["„”]+|["„”]+$/g, "");
   const words = title.split(/\s+/u);
   if (words.length < 3 || words.length > 5 || title.length > 100 || /[\r\n]/u.test(title)) return;
-  if (!await validSession(token)) return;
+  if (!await stillSignedIn()) return;
   const { error: updateError } = await db.from("conversations").update({ title })
     .eq("id", chat.id).eq("session_scope", scope).eq("title", chat.title)
     .abortSignal(AbortSignal.timeout(5_000));
@@ -42,10 +41,10 @@ type StoredMessage = {
   content: string;
 };
 
-// Historia jest wspólna dla wszystkich logowań tym samym hasłem: klucz zależy
-// tylko od SESSION_SECRET, nie od tokenu. Wywołujący sprawdza sesję wcześniej.
-// Zmiana hasła nie ukrywa historii; zmiana sekretu tak.
-function sessionScope(_token: string) {
+// TYMCZASOWO historia jest wspólna dla wszystkich zalogowanych kont: klucz zależy
+// tylko od SESSION_SECRET (jak przed przejściem na Supabase Auth). Rozdzielenie
+// rozmów między konta to następny krok. Wywołujący weryfikuje użytkownika wcześniej.
+function sessionScope() {
   const secret = process.env.SESSION_SECRET;
   if (!secret) throw new Error("Missing SESSION_SECRET.");
   return createHmac("sha256", secret).update("chat-history-v1").digest("hex");
@@ -71,12 +70,12 @@ function messageContent(message: Pick<ChatMessage, "parts">) {
   return [text.trim(), ...imageMarkers].filter(Boolean).join("\n");
 }
 
-// Wywoływane przez stronę i endpoint po zweryfikowaniu podpisanego cookie.
-export async function loadLatestChat(token: string, chatId?: string) {
+// Wywoływane przez stronę i endpoint po weryfikacji użytkownika.
+export async function loadLatestChat(chatId?: string) {
   const db = getSupabase();
   let query = db.from("conversations")
     .select("id, chat_id")
-    .eq("session_scope", sessionScope(token))
+    .eq("session_scope", sessionScope())
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(1);
@@ -111,13 +110,13 @@ export async function loadLatestChat(token: string, chatId?: string) {
   }
 }
 
-export async function listChats(token: string) {
+export async function listChats() {
   const rows: { chat_id: string; title: string; created_at: string; messages: { count: number }[] }[] = [];
   const signal = AbortSignal.timeout(10_000);
   for (let offset = 0; ; offset += 500) {
     const { data, error } = await getSupabase().from("conversations")
       .select("chat_id,title,created_at,messages(count)")
-      .eq("session_scope", sessionScope(token))
+      .eq("session_scope", sessionScope())
       .order("created_at", { ascending: false }).order("id", { ascending: false })
       .range(offset, offset + 499).abortSignal(signal);
     if (error) throw new Error("Supabase history read failed.");
@@ -127,17 +126,17 @@ export async function listChats(token: string) {
 }
 
 export async function saveChatTurn(
-  token: string,
   chatId: string,
   question: ChatMessage,
   answer: Pick<ChatMessage, "parts">,
+  stillSignedIn: () => Promise<boolean>,
 ) {
   const assistantContent = messageContent(answer);
   if (!assistantContent) return;
 
   const db = getSupabase();
   const args = {
-    p_session_scope: sessionScope(token),
+    p_session_scope: sessionScope(),
     p_chat_id: chatId,
     p_turn_id: question.id,
     p_user_content: messageContent(question),
@@ -148,7 +147,7 @@ export async function saveChatTurn(
       .abortSignal(AbortSignal.timeout(5_000));
     if (!error) {
       // Awaria tytułu pozostawia zapisane wiadomości i tytuł z pierwszego pytania.
-      try { await titleFirstTurn(token, chatId, args.p_user_content, assistantContent); } catch {}
+      try { await titleFirstTurn(chatId, args.p_user_content, assistantContent, stillSignedIn); } catch {}
       return;
     }
     if (status !== 0 && status < 500) break;

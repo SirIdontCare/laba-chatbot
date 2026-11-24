@@ -2,8 +2,9 @@
 import { useState, useRef, useEffect, type FormEvent } from 'react';
 import Link from 'next/link';
 import ThemeToggle from '../theme-toggle';
+import UserMenu from '../user-menu';
 import type { TravelResult } from '../../lib/travel-dashboard';
-export default function DashboardClient() {
+export default function DashboardClient({ email }: { email: string | null }) {
   const [compare, setCompare] = useState(false);
   const [secondCity, setSecondCity] = useState('');
   const [city, setCity] = useState('');
@@ -30,7 +31,7 @@ export default function DashboardClient() {
     finally { active.current = null; setBusy(false); }
   }
   return <main className={`chat dashboard ${compare ? "dashboard--compare" : ""}`}>
-    <header className="chat-header"><div><p className="eyebrow">TWOJA PRZESTRZEŃ PODRÓŻY</p><h1>Asystent podróży</h1><p className="header-description">Pięć źródeł. Jeden plan na wyjazd.</p></div><div className="header-actions"><Link href="/">← Wróć do czatu</Link><ThemeToggle /></div></header>
+    <header className="chat-header"><div><p className="eyebrow">TWOJA PRZESTRZEŃ PODRÓŻY</p><h1>Asystent podróży</h1><p className="header-description">Pięć źródeł. Jeden plan na wyjazd.</p></div><div className="header-actions"><Link href="/">← Wróć do czatu</Link><ThemeToggle /><UserMenu email={email} /></div></header>
     <nav className="mode-switch" aria-label="Tryb podróży">{[false, true].map((value) => <button key={String(value)} type="button" aria-pressed={compare === value} disabled={busy} onClick={() => { setCompare(value); setResult(undefined); setAttempted(false); }}>{value ? 'Porównaj' : 'Jedno miasto'}</button>)}</nav>
     <form className="travel-form" onSubmit={load}>
       <label>Dokąd jedziesz?<input value={city} onChange={(e) => {setCity(e.target.value); setResult(undefined); setAttempted(false);}} required minLength={2} maxLength={120} placeholder="Miasto, np. Lizbona, Portugalia" disabled={busy} /></label>
