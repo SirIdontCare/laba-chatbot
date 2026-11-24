@@ -10,7 +10,7 @@ export default async function ProfilePage() {
   if (!user) redirect(loginPath("/profile"));
   const header = <header className="chat-header"><h1>Profil</h1><UserMenu email={user.email} /></header>;
   let profile;
-  try { profile = await loadUserProfile(); }
+  try { profile = await loadUserProfile(user); }
   catch { return <main className="chat">{header}<p role="alert">Nie udało się wczytać profilu. Odśwież stronę.</p><a href="/">Wróć do czatu</a></main>; }
   return <main className="chat">{header}<a href="/">Wróć do czatu</a><ProfileEditor profile={profile} /></main>;
 }

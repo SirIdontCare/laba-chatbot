@@ -11,7 +11,7 @@ export default async function HistoryPage() {
   if (!user) redirect(loginPath("/history"));
   let chats;
   try {
-    chats = await listChats();
+    chats = await listChats(user);
   } catch {
     return <main className="chat"><h1>Historia</h1><p role="alert">Nie udało się wczytać historii. Odśwież stronę.</p><Link href="/">Wróć do czatu</Link></main>;
   }

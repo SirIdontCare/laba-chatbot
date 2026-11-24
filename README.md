@@ -26,7 +26,7 @@ OPENROUTER_MODEL=
 
 Po pierwszym `=` wpisz swój klucz OpenRouter. Po drugim wpisz dokładny identyfikator modelu skopiowany z [listy modeli OpenRouter](https://openrouter.ai/models), w formacie `dostawca/model`. Wartości podajesz wyłącznie w lokalnym pliku, nie w rozmowie. Nie dodawaj prefiksu `NEXT_PUBLIC_`.
 
-Historia czatu wymaga adresu projektu w `SUPABASE_URL` oraz klucza serwerowego w `SUPABASE_SECRET_KEY`. Obie zmienne należą do środowiska serwera. Skrypt `supabase/create_chat_tables.sql` uzupełnia tabele `conversations` i `messages` oraz instaluje funkcję zapisu pary wiadomości. Czat zapisuje zakończone tury wraz z tekstem i dopiskami `[obraz]`. Na razie historia jest wspólna dla wszystkich kont: klucz w bazie wynika z `SESSION_SECRET` (HMAC), więc każdy zalogowany widzi wszystkie rozmowy. Rozdzielenie rozmów między konta to następny krok. Zmiana `SESSION_SECRET` ukrywa dotychczasową historię. Localhost i Vercel mają wspólną historię tylko przy tej samej bazie i tym samym `SESSION_SECRET`.
+Historia czatu korzysta z tabel `conversations` i `messages` (skrypty w `supabase/` opisują ich pierwotny kształt; podział na konta — kolumna `user_id`, RLS i polityki — został dodany w bazie). Czat zapisuje zakończone tury wraz z tekstem i dopiskami `[obraz]`. Każde konto ma własną historię i własny profil. Rozmowy, wiadomości i profil aplikacja czyta i zapisuje klientem Supabase zalogowanej osoby (klucz publishable + token z jej sesji), więc dostępu pilnuje RLS „tylko własne wiersze”. Kolumnę `user_id` wypełnia baza (`auth.uid()`); aplikacja jej nie wysyła ani nie przyjmuje z przeglądarki. Klucz serwerowy `SUPABASE_SECRET_KEY` służy już tylko wspólnej bazie wiedzy (`documents`, `chunks`, `match_chunks`). Stare rozmowy sprzed podziału (z pustym `user_id`) nie są widoczne dla nikogo; aby przypisać je do konta, wpisz jego UID w kolumnie `user_id` w Table Editor. Localhost i Vercel widzą tę samą historię konta, gdy korzystają z tej samej bazy.
 
 Zapisz plik. Jeśli serwer działał podczas zmiany konfiguracji, uruchom go ponownie: zakończ go przez `Ctrl+C`, a następnie wpisz w terminalu:
 
@@ -71,7 +71,7 @@ Strona `/login` ma zakładki „Zaloguj się” i „Załóż konto”. Hasło n
 - Podczas logowania i rejestracji przycisk jest zablokowany i pokazuje „Chwileczkę…”.
 - Limity prób logowania i rejestracji zapewnia Supabase Auth (Authentication → Rate Limits).
 
-`SESSION_SECRET` służy już tylko jako klucz wspólnej historii rozmów (patrz wyżej). `CHAT_PASSWORD` nie jest używane.
+`CHAT_PASSWORD` i `SESSION_SECRET` nie są już używane.
 
 ## Sprawdzenie ochrony
 
@@ -145,7 +145,7 @@ Narzędzia korzystają z istniejącego AI SDK i Zod; bez nowych bibliotek i kluc
 | `kalkulator` | `dzialanie`: dodaj/odejmij/pomnoz/podziel/potega/procent oraz liczby `a`, `b` jako oddzielne argumenty. Lokalne operatory JavaScript, bez `eval` i wykonywania tekstu. | Skończony wynik albo komunikat (dzielenie przez zero, wynik nierzeczywisty, przepełnienie). Procent = a% z b. Standardowa precyzja Number. |
 | `czas` | Opcjonalna `strefa` IANA, domyślnie Europe/Warsaw. Lokalne `Intl.DateTimeFormat` i zegar serwera. `aktualnyCzas` jest zachowanym aliasem i nadal służy do wymuszonego sprawdzenia daty. | Data, dzień tygodnia, godzina, strefa i czas pobrania; nieznana strefa → komunikat. |
 | `notatki` | `akcja: zapisz` + `tresc` (1–2000 znaków) albo `akcja: pokaz`. Lokalny `Map` w pamięci procesu. | Zapis zwraca nową notatkę; odczyt listę notatek z identyfikatorami i czasami zapisu. Limit 100 na sesję i 200 sesji na instancję; po zapełnieniu czytelny komunikat, bez usuwania starszych wpisów. |
-| `diagnostyka` | Puste `{}`. Lokalna lista rejestru, stała limitu i wskazane pola `process.env`. | Skonfigurowana nazwa modelu, faktyczna lista narzędzi (w tym wyszukiwanie, obraz i alias czasu), limit 18 kroków oraz `tak`/`nie` dla OPENROUTER_API_KEY, OPENROUTER_MODEL, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY, SESSION_SECRET. Nigdy wartości sekretów. |
+| `diagnostyka` | Puste `{}`. Lokalna lista rejestru, stała limitu i wskazane pola `process.env`. | Skonfigurowana nazwa modelu, faktyczna lista narzędzi (w tym wyszukiwanie, obraz i alias czasu), limit 18 kroków oraz `tak`/`nie` dla OPENROUTER_API_KEY, OPENROUTER_MODEL, NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY. Nigdy wartości sekretów. |
 
 Notatki są izolowane według sesji logowania. Model nie podaje identyfikatora sesji: serwer wyznacza klucz pamięci ze skrótu identyfikatora użytkownika i sesji ze zweryfikowanego tokenu Supabase, nie przekazuje go modelowi. Notatki znikają po restarcie, ponownym logowaniu lub zmianie instancji; na hostingu wiele instancji może mieć różne zestawy notatek. To celowo tymczasowe rozwiązanie na tę lekcję, bez bazy i zapisu na dysku.
 

@@ -8,6 +8,10 @@ const TEST_USER = Object.freeze({
   sessionId: "22222222-2222-4222-8222-222222222222",
 });
 const TEST_AUTH_COOKIE = "sb-test-auth-token=valid";
+// Baza "zalogowanej osoby" w testach: prawdziwy klient supabase-js z tokenem testowym.
+// Zapytania trafiają do globalnego fetch, który testy podstawiają.
+const USER_DB_URL = "https://user-db.test";
+const USER_DB_TOKEN = "test-user-access-token";
 const state = { stillSignedIn: true };
 
 function signedIn(request) {
@@ -15,9 +19,15 @@ function signedIn(request) {
   return cookies.includes(TEST_AUTH_COOKIE);
 }
 
+function testUser() {
+  const { createClient } = require("@supabase/supabase-js");
+  const db = createClient(USER_DB_URL, "sb_publishable_test", { accessToken: async () => USER_DB_TOKEN });
+  return { ...TEST_USER, db, stillSignedIn: async () => state.stillSignedIn };
+}
+
 function installFakeAuth() {
   const file = require.resolve("../lib/supabase-server.ts");
-  const user = { ...TEST_USER, stillSignedIn: async () => state.stillSignedIn };
+  const user = testUser();
   require.cache[file] = {
     id: file, filename: file, loaded: true, children: [], paths: [],
     exports: {
@@ -28,4 +38,4 @@ function installFakeAuth() {
   };
 }
 
-module.exports = { installFakeAuth, TEST_USER, TEST_AUTH_COOKIE, fakeAuthState: state };
+module.exports = { installFakeAuth, testUser, TEST_USER, TEST_AUTH_COOKIE, USER_DB_URL, USER_DB_TOKEN, fakeAuthState: state };

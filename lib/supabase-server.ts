@@ -2,7 +2,7 @@ import "server-only";
 import { cache } from "react";
 import { cookies } from "next/headers";
 import { createServerClient, parseCookieHeader, type CookieOptions } from "@supabase/ssr";
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { createClient as createSupabaseClient, type SupabaseClient } from "@supabase/supabase-js";
 import { supabaseAuthConfig } from "./supabase-config";
 
 // Tożsamość ustala wyłącznie serwer: z podpisanego tokenu Supabase zweryfikowanego
@@ -11,6 +11,9 @@ export type SignedInUser = {
   id: string;
   email: string | null;
   sessionId: string | null;
+  // Baza danych jako ta osoba: klucz publishable + token z jej zweryfikowanej sesji.
+  // Każde zapytanie przechodzi przez RLS, więc baza pokazuje i zmienia tylko jej wiersze.
+  db: SupabaseClient;
   // Ponowna weryfikacja tego samego tokenu (bez odświeżania sesji),
   // np. przed zapisem po długiej odpowiedzi modelu.
   stillSignedIn: () => Promise<boolean>;
@@ -27,17 +30,33 @@ async function writeCookies(cookiesToSet: { name: string; value: string; options
   }
 }
 
+type AuthConfig = NonNullable<ReturnType<typeof supabaseAuthConfig>>;
+
 function createClient(readCookies: () => CookieList) {
   const config = supabaseAuthConfig();
   if (!config) return null;
   // Nowy klient dla każdego żądania. Nie współdzielimy go między użytkownikami.
-  return createServerClient(config.url, config.key, {
-    cookies: { getAll: readCookies, setAll: writeCookies },
+  return {
+    config,
+    supabase: createServerClient(config.url, config.key, {
+      cookies: { getAll: readCookies, setAll: writeCookies },
+    }),
+  };
+}
+
+// Klient bazy z tokenem już zweryfikowanej sesji. Nie odświeża sesji w tle: gdy token
+// wygaśnie w trakcie długiej odpowiedzi, zapis się nie uda, zamiast zużyć refresh token
+// bez możliwości zapisania nowych ciasteczek.
+function userDatabase(config: AuthConfig, accessToken: string) {
+  return createSupabaseClient(config.url, config.key, {
+    accessToken: async () => accessToken,
+    global: { fetch: (input, init) => fetch(input, { ...init, cache: "no-store" }) },
   });
 }
 
-async function verify(supabase: SupabaseClient | null): Promise<SignedInUser | null> {
-  if (!supabase) return null;
+async function verify(client: ReturnType<typeof createClient>): Promise<SignedInUser | null> {
+  if (!client) return null;
+  const { config, supabase } = client;
   try {
     // getClaims() sprawdza podpis i ważność tokenu (lokalnie kluczem JWKS albo
     // zapytaniem do Supabase Auth). Samo odczytanie ciasteczka nie wystarcza.
@@ -47,13 +66,14 @@ async function verify(supabase: SupabaseClient | null): Promise<SignedInUser | n
     // Token z już zweryfikowanej sesji służy tylko do ponownej weryfikacji.
     const { data: { session } } = await supabase.auth.getSession();
     const accessToken = session?.access_token;
+    if (!accessToken) return null;
     const userId = claims.sub;
     return {
       id: userId,
       email: typeof claims.email === "string" && claims.email ? claims.email : null,
       sessionId: typeof claims.session_id === "string" ? claims.session_id : null,
+      db: userDatabase(config, accessToken),
       stillSignedIn: async () => {
-        if (!accessToken) return false;
         try {
           const again = await supabase.auth.getClaims(accessToken);
           return !again.error && again.data?.claims.sub === userId;
@@ -82,5 +102,5 @@ export async function requestUser(request: Request): Promise<SignedInUser | null
 // Klient do zakończenia logowania w Route Handlerze (np. potwierdzenie e-maila).
 export async function createRouteClient() {
   const store = await cookies();
-  return createClient(() => store.getAll());
+  return createClient(() => store.getAll())?.supabase ?? null;
 }

@@ -1,23 +1,55 @@
 import "server-only";
-import { createHmac } from "node:crypto";
 import type { ChatMessage } from "./chat-message";
 import { imageToolOutputSchema, inspectionOutputSchema } from "./image-tool-schema";
-import { getSupabase } from "./supabase";
+import type { SignedInUser } from "./supabase-server";
 import { generateText } from "ai";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 
-export async function deleteChat(chatId: string) {
-  const { error } = await getSupabase().rpc("delete_chat", {
-    p_session_scope: sessionScope(), p_chat_id: chatId,
-  }).abortSignal(AbortSignal.timeout(10_000));
+// Rozmowy i wiadomości czytamy i zapisujemy klientem bazy zalogowanej osoby
+// (klucz publishable + token z jej sesji), więc bazy pilnuje RLS „tylko własne wiersze”.
+// Kolumnę user_id wypełnia baza (domyślnie auth.uid()); kod jej nie wysyła.
+// Filtr .eq("user_id", owner.id) to dodatkowe zabezpieczenie: identyfikator pochodzi
+// wyłącznie ze zweryfikowanej sesji na serwerze.
+export type ChatOwner = Pick<SignedInUser, "db" | "id">;
+
+// Wymagana kolumna session_scope (razem z chat_id tworzy unikalny klucz rozmowy).
+// Wartość wyznacza serwer ze zweryfikowanej sesji; o dostępie decydują user_id i RLS.
+const sessionScope = (owner: ChatOwner) => `user:${owner.id}`;
+
+type StoredMessage = {
+  turn_id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+async function findConversation(owner: ChatOwner, chatId: string, signal: AbortSignal) {
+  const { data, error } = await owner.db.from("conversations")
+    .select("id")
+    .eq("user_id", owner.id).eq("chat_id", chatId)
+    .abortSignal(signal)
+    .maybeSingle()
+    .overrideTypes<{ id: number } | null, { merge: false }>();
+  if (error) throw new Error("Supabase conversation read failed.");
+  return data?.id ?? null;
+}
+
+export async function deleteChat(owner: ChatOwner, chatId: string) {
+  const signal = AbortSignal.timeout(10_000);
+  const conversationId = await findConversation(owner, chatId, signal);
+  if (conversationId === null) return;
+  const { error: messagesError } = await owner.db.from("messages").delete()
+    .eq("user_id", owner.id).eq("conversation_id", conversationId).abortSignal(signal);
+  if (messagesError) throw new Error("Supabase messages delete failed.");
+  const { error } = await owner.db.from("conversations").delete()
+    .eq("user_id", owner.id).eq("id", conversationId).abortSignal(signal);
   if (error) throw new Error("Supabase delete failed.");
 }
 
-async function titleFirstTurn(chatId: string, question: string, answer: string, stillSignedIn: () => Promise<boolean>) {
-  const db = getSupabase();
-  const scope = sessionScope();
-  const { data: chat, error } = await db.from("conversations")
-    .select("id,title,messages(count)").eq("session_scope", scope).eq("chat_id", chatId).single();
+async function titleFirstTurn(
+  owner: ChatOwner, chatId: string, question: string, answer: string, stillSignedIn: () => Promise<boolean>,
+) {
+  const { data: chat, error } = await owner.db.from("conversations")
+    .select("id,title,messages(count)").eq("user_id", owner.id).eq("chat_id", chatId).single();
   if (error || !chat || chat.messages[0]?.count !== 2) return;
   const result = await generateText({
     model: createOpenRouter({ apiKey: process.env.OPENROUTER_API_KEY })(process.env.OPENROUTER_MODEL!),
@@ -29,25 +61,10 @@ async function titleFirstTurn(chatId: string, question: string, answer: string, 
   const words = title.split(/\s+/u);
   if (words.length < 3 || words.length > 5 || title.length > 100 || /[\r\n]/u.test(title)) return;
   if (!await stillSignedIn()) return;
-  const { error: updateError } = await db.from("conversations").update({ title })
-    .eq("id", chat.id).eq("session_scope", scope).eq("title", chat.title)
+  const { error: updateError } = await owner.db.from("conversations").update({ title })
+    .eq("user_id", owner.id).eq("id", chat.id).eq("title", chat.title)
     .abortSignal(AbortSignal.timeout(5_000));
   if (updateError) throw new Error("Supabase title update failed.");
-}
-
-type StoredMessage = {
-  turn_id: string;
-  role: "user" | "assistant";
-  content: string;
-};
-
-// TYMCZASOWO historia jest wspólna dla wszystkich zalogowanych kont: klucz zależy
-// tylko od SESSION_SECRET (jak przed przejściem na Supabase Auth). Rozdzielenie
-// rozmów między konta to następny krok. Wywołujący weryfikuje użytkownika wcześniej.
-function sessionScope() {
-  const secret = process.env.SESSION_SECRET;
-  if (!secret) throw new Error("Missing SESSION_SECRET.");
-  return createHmac("sha256", secret).update("chat-history-v1").digest("hex");
 }
 
 function messageContent(message: Pick<ChatMessage, "parts">) {
@@ -71,11 +88,10 @@ function messageContent(message: Pick<ChatMessage, "parts">) {
 }
 
 // Wywoływane przez stronę i endpoint po weryfikacji użytkownika.
-export async function loadLatestChat(chatId?: string) {
-  const db = getSupabase();
-  let query = db.from("conversations")
+export async function loadLatestChat(owner: ChatOwner, chatId?: string) {
+  let query = owner.db.from("conversations")
     .select("id, chat_id")
-    .eq("session_scope", sessionScope())
+    .eq("user_id", owner.id)
     .order("created_at", { ascending: false })
     .order("id", { ascending: false })
     .limit(1);
@@ -91,8 +107,9 @@ export async function loadLatestChat(chatId?: string) {
   const pageSize = 500;
   const signal = AbortSignal.timeout(10_000);
   for (let offset = 0; ; offset += pageSize) {
-    const { data, error } = await db.from("messages")
+    const { data, error } = await owner.db.from("messages")
       .select("turn_id, role, content")
+      .eq("user_id", owner.id)
       .eq("conversation_id", chat.id)
       .order("id")
       .range(offset, offset + pageSize - 1)
@@ -110,13 +127,13 @@ export async function loadLatestChat(chatId?: string) {
   }
 }
 
-export async function listChats() {
+export async function listChats(owner: ChatOwner) {
   const rows: { chat_id: string; title: string; created_at: string; messages: { count: number }[] }[] = [];
   const signal = AbortSignal.timeout(10_000);
   for (let offset = 0; ; offset += 500) {
-    const { data, error } = await getSupabase().from("conversations")
+    const { data, error } = await owner.db.from("conversations")
       .select("chat_id,title,created_at,messages(count)")
-      .eq("session_scope", sessionScope())
+      .eq("user_id", owner.id)
       .order("created_at", { ascending: false }).order("id", { ascending: false })
       .range(offset, offset + 499).abortSignal(signal);
     if (error) throw new Error("Supabase history read failed.");
@@ -126,6 +143,7 @@ export async function listChats() {
 }
 
 export async function saveChatTurn(
+  owner: ChatOwner,
   chatId: string,
   question: ChatMessage,
   answer: Pick<ChatMessage, "parts">,
@@ -133,24 +151,31 @@ export async function saveChatTurn(
 ) {
   const assistantContent = messageContent(answer);
   if (!assistantContent) return;
+  const userContent = messageContent(question);
+  const signal = AbortSignal.timeout(10_000);
 
-  const db = getSupabase();
-  const args = {
-    p_session_scope: sessionScope(),
-    p_chat_id: chatId,
-    p_turn_id: question.id,
-    p_user_content: messageContent(question),
-    p_assistant_content: assistantContent,
-  };
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const { error, status } = await db.rpc("save_chat_turn", args)
-      .abortSignal(AbortSignal.timeout(5_000));
-    if (!error) {
-      // Awaria tytułu pozostawia zapisane wiadomości i tytuł z pierwszego pytania.
-      try { await titleFirstTurn(chatId, args.p_user_content, assistantContent, stillSignedIn); } catch {}
-      return;
-    }
-    if (status !== 0 && status < 500) break;
+  let conversationId = await findConversation(owner, chatId, signal);
+  if (conversationId === null) {
+    const { data, error } = await owner.db.from("conversations")
+      .insert({ session_scope: sessionScope(owner), chat_id: chatId, title: userContent.trim().slice(0, 100) })
+      .select("id")
+      .abortSignal(signal)
+      .single()
+      .overrideTypes<{ id: number }, { merge: false }>();
+    // 23505: ta sama rozmowa właśnie powstała w równoległym żądaniu.
+    if (error?.code === "23505") conversationId = await findConversation(owner, chatId, signal);
+    else if (error || !data) throw new Error("Supabase conversation insert failed.");
+    else conversationId = data.id;
+    if (conversationId === null) throw new Error("Supabase conversation insert failed.");
   }
-  throw new Error("Supabase chat write failed.");
+
+  // Para pytanie–odpowiedź; ponowny zapis tej samej tury niczego nie dubluje.
+  const { error } = await owner.db.from("messages").upsert([
+    { conversation_id: conversationId, turn_id: question.id, role: "user", content: userContent },
+    { conversation_id: conversationId, turn_id: question.id, role: "assistant", content: assistantContent },
+  ], { onConflict: "conversation_id,turn_id,role", ignoreDuplicates: true }).abortSignal(signal);
+  if (error) throw new Error("Supabase chat write failed.");
+
+  // Awaria tytułu pozostawia zapisane wiadomości i tytuł z pierwszego pytania.
+  try { await titleFirstTurn(owner, chatId, userContent, assistantContent, stillSignedIn); } catch {}
 }

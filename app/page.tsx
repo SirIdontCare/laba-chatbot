@@ -17,12 +17,12 @@ export default async function Home({ searchParams }: {
 
   const emptyChat = { id: randomUUID(), messages: [] };
   let profileName: string | null = null;
-  try { profileName = (await loadUserProfile()).name; } catch {}
+  try { profileName = (await loadUserProfile(user)).name; } catch {}
   if (params.new === "1") return <ChatClient key={emptyChat.id} initialChat={emptyChat} profileName={profileName} email={user.email} />;
   if (params.chat && !z.uuid().safeParse(params.chat).success) notFound();
   let chat;
   try {
-    chat = await loadLatestChat(params.chat);
+    chat = await loadLatestChat(user, params.chat);
   } catch {
     return <ChatClient initialChat={emptyChat} historyError={CHAT_ERRORS.history} profileName={profileName} email={user.email} />;
   }

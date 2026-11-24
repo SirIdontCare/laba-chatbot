@@ -87,8 +87,7 @@ export function createNotesTool(scope: string) {
 const diagnosticOutputSchema = z.object({
   model: z.string(), narzedzia: z.array(z.string()), limitKrokow: z.number().int(),
   zmienne: z.object({ OPENROUTER_API_KEY: z.enum(["tak", "nie"]), OPENROUTER_MODEL: z.enum(["tak", "nie"]),
-    NEXT_PUBLIC_SUPABASE_URL: z.enum(["tak", "nie"]), NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.enum(["tak", "nie"]),
-    SESSION_SECRET: z.enum(["tak", "nie"]) }),
+    NEXT_PUBLIC_SUPABASE_URL: z.enum(["tak", "nie"]), NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: z.enum(["tak", "nie"]) }),
   pobranoAt: z.iso.datetime(),
 });
 
@@ -105,7 +104,6 @@ export function createDiagnosticsTool(names: readonly string[], stepLimit: numbe
         OPENROUTER_MODEL: process.env.OPENROUTER_MODEL?.trim() ? "tak" as const : "nie" as const,
         NEXT_PUBLIC_SUPABASE_URL: process.env.NEXT_PUBLIC_SUPABASE_URL?.trim() ? "tak" as const : "nie" as const,
         NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY: process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY?.trim() ? "tak" as const : "nie" as const,
-        SESSION_SECRET: process.env.SESSION_SECRET?.trim() ? "tak" as const : "nie" as const,
       }, pobranoAt: new Date().toISOString(),
     }),
   });

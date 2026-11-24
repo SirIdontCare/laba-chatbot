@@ -39,7 +39,7 @@ export async function agentChat(
   let messages: ChatMessage[];
   // Przestrzeń notatek wynika ze zweryfikowanej sesji logowania; model jej nie wybiera.
   const scope = createHash("sha256").update(`${user.id}:${user.sessionId ?? ""}`).digest("hex");
-  const localTools = createAgentTools(scope, user.stillSignedIn, () => messages?.at(-1)?.parts
+  const localTools = createAgentTools(scope, user, () => messages?.at(-1)?.parts
     .filter(part => part.type === "text").map(part => part.text).join(" ") ?? "",
     () => messages?.at(-2)?.role === "assistant" ? messages.at(-2)!.parts
       .filter(part => part.type === "text").map(part => part.text).join(" ") : "");
@@ -99,7 +99,8 @@ export async function agentChat(
   const unavailableMessage = hasPhoto ? CHAT_ERRORS.visionUnavailable : CHAT_ERRORS.unavailable;
 
   try {
-    const profile = await loadUserProfile();
+    // Profil zalogowanej osoby (RLS), nigdy wspólny ani wskazany przez model.
+    const profile = await loadUserProfile(user);
     const openrouter = createOpenRouter({ apiKey });
     const question = messages.at(-1)!;
     const lastQuestion = question.parts
@@ -235,7 +236,7 @@ export async function agentChat(
         if (isAborted || isCancelled || outcome.status !== "completed" || finishReason === "error") return;
         try {
           if (!await user.stillSignedIn()) throw new Error("Session expired.");
-          await saveChatTurn(chatId, question, responseMessage, user.stillSignedIn);
+          await saveChatTurn(user, chatId, question, responseMessage, user.stillSignedIn);
         } catch {
           saveFailed = true;
         }

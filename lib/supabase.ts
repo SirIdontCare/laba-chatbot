@@ -1,6 +1,8 @@
 import "server-only";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
+// Klient z kluczem secret omija RLS. Służy wyłącznie do wspólnej bazy wiedzy
+// (documents, chunks, match_chunks). Rozmowy i profil idą przez SignedInUser.db.
 let supabase: SupabaseClient | undefined;
 
 export function getSupabase(): SupabaseClient {
