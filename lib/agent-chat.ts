@@ -21,7 +21,7 @@ import { imageToolInputSchema } from "./image-tool-schema";
 import { createAgentTools } from "./agent-tools";
 import { AGENT_STEP_LIMIT } from "./tool-catalog";
 import type { SignedInUser } from "./supabase-server";
-import { saveChatTurn } from "./chat-history";
+import { claimConversation, discardEmptyConversation, saveChatTurn } from "./chat-history";
 import { loadUserProfile, PROFILE_INSTRUCTIONS, profileFollowUp } from "./user-profile";
 
 const turnIdSchema = z.uuid();
@@ -95,6 +95,20 @@ export async function agentChat(
   if (!apiKey || !model) {
     return new Response(CHAT_ERRORS.configuration, { status: 503 });
   }
+
+  // Rozmowa musi należeć do zalogowanej osoby. Cudzy identyfikator kończy się 404
+  // zanim cokolwiek zostanie odczytane, zapisane albo wysłane do modelu.
+  let claimedNew = false;
+  if (chatId) {
+    let claim;
+    try { claim = await claimConversation(user, chatId, messages.at(-1)!); }
+    catch { return new Response(CHAT_ERRORS.save, { status: 503 }); }
+    if (claim === "taken") return new Response(CHAT_ERRORS.notFound, { status: 404 });
+    claimedNew = claim === "created";
+  }
+  const discardClaim = async () => {
+    if (claimedNew && chatId) try { await discardEmptyConversation(user, chatId); } catch {}
+  };
   const hasPhoto = messages.some((message) => message.parts.some((part) => part.type === "file"));
   const unavailableMessage = hasPhoto ? CHAT_ERRORS.visionUnavailable : CHAT_ERRORS.unavailable;
 
@@ -233,12 +247,13 @@ export async function agentChat(
       },
       onError: () => unavailableMessage,
       onEnd: chatId ? async ({ isAborted, isCancelled, outcome, finishReason, responseMessage }) => {
-        if (isAborted || isCancelled || outcome.status !== "completed" || finishReason === "error") return;
+        if (isAborted || isCancelled || outcome.status !== "completed" || finishReason === "error") return discardClaim();
         try {
           if (!await user.stillSignedIn()) throw new Error("Session expired.");
           await saveChatTurn(user, chatId, question, responseMessage, user.stillSignedIn);
         } catch {
           saveFailed = true;
+          await discardClaim();
         }
       } : undefined,
     });
@@ -257,6 +272,7 @@ export async function agentChat(
     })) : uiStream;
     return createUIMessageStreamResponse({ stream });
   } catch {
+    await discardClaim();
     return new Response(unavailableMessage, { status: 502 });
   }
 }

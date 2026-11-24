@@ -18,7 +18,7 @@ export default async function UploadPage() {
   const user = await currentUser();
   if (!user) redirect(loginPath("/upload"));
   let documents;
-  try { documents = await listDocuments(); } catch { documents = null; }
+  try { documents = await listDocuments(user); } catch { documents = null; }
   const format = new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Warsaw" });
   return <main className="chat">
     <header className="chat-header"><h1>Baza wiedzy</h1><UserMenu email={user.email} /></header>

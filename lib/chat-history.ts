@@ -12,9 +12,10 @@ import { createOpenRouter } from "@openrouter/ai-sdk-provider";
 // wyłącznie ze zweryfikowanej sesji na serwerze.
 export type ChatOwner = Pick<SignedInUser, "db" | "id">;
 
-// Wymagana kolumna session_scope (razem z chat_id tworzy unikalny klucz rozmowy).
-// Wartość wyznacza serwer ze zweryfikowanej sesji; o dostępie decydują user_id i RLS.
-const sessionScope = (owner: ChatOwner) => `user:${owner.id}`;
+// Wymagana kolumna session_scope tworzy z chat_id unikalny klucz rozmowy. Jedna stała wartość
+// dla wszystkich kont sprawia, że identyfikator rozmowy jest jednoznaczny w całej bazie:
+// cudzego identyfikatora nie da się zająć jako własnej rozmowy. O dostępie decydują user_id i RLS.
+const SESSION_SCOPE = "konto";
 
 type StoredMessage = {
   turn_id: string;
@@ -33,16 +34,45 @@ async function findConversation(owner: ChatOwner, chatId: string, signal: AbortS
   return data?.id ?? null;
 }
 
-export async function deleteChat(owner: ChatOwner, chatId: string) {
+// Zwraca false, gdy rozmowy nie ma albo należy do innej osoby (RLS jej nie pokazuje).
+export async function deleteChat(owner: ChatOwner, chatId: string): Promise<boolean> {
   const signal = AbortSignal.timeout(10_000);
   const conversationId = await findConversation(owner, chatId, signal);
-  if (conversationId === null) return;
+  if (conversationId === null) return false;
   const { error: messagesError } = await owner.db.from("messages").delete()
     .eq("user_id", owner.id).eq("conversation_id", conversationId).abortSignal(signal);
   if (messagesError) throw new Error("Supabase messages delete failed.");
   const { error } = await owner.db.from("conversations").delete()
     .eq("user_id", owner.id).eq("id", conversationId).abortSignal(signal);
   if (error) throw new Error("Supabase delete failed.");
+  return true;
+}
+
+export type ConversationClaim = "own" | "created" | "taken";
+
+// Przed uruchomieniem modelu: istniejąca rozmowa musi należeć do zalogowanej osoby, a nowa
+// zostaje od razu zajęta na jej konto. "taken" = identyfikator należy do innej osoby
+// (RLS go nie pokazuje, a unikalny klucz nie pozwala go zająć) — wtedy nic nie czytamy ani nie zapisujemy.
+export async function claimConversation(owner: ChatOwner, chatId: string, question: ChatMessage): Promise<ConversationClaim> {
+  const signal = AbortSignal.timeout(10_000);
+  if (await findConversation(owner, chatId, signal) !== null) return "own";
+  const { error } = await owner.db.from("conversations")
+    .insert({ session_scope: SESSION_SCOPE, chat_id: chatId, title: messageContent(question).slice(0, 100) })
+    .abortSignal(signal);
+  if (!error) return "created";
+  if (error.code !== "23505") throw new Error("Supabase conversation insert failed.");
+  // 23505: identyfikator jest zajęty — przez równoległe żądanie tej osoby albo przez kogoś innego.
+  return await findConversation(owner, chatId, signal) !== null ? "own" : "taken";
+}
+
+// Sprząta rozmowę zajętą na początku żądania, jeśli tura się nie udała i nie ma w niej wiadomości.
+export async function discardEmptyConversation(owner: ChatOwner, chatId: string) {
+  const { data, error } = await owner.db.from("conversations")
+    .select("id,messages(count)").eq("user_id", owner.id).eq("chat_id", chatId)
+    .abortSignal(AbortSignal.timeout(5_000)).maybeSingle();
+  if (error || !data || data.messages[0]?.count !== 0) return;
+  await owner.db.from("conversations").delete().eq("user_id", owner.id).eq("id", data.id)
+    .abortSignal(AbortSignal.timeout(5_000));
 }
 
 async function titleFirstTurn(
@@ -137,7 +167,8 @@ export async function listChats(owner: ChatOwner) {
       .order("created_at", { ascending: false }).order("id", { ascending: false })
       .range(offset, offset + 499).abortSignal(signal);
     if (error) throw new Error("Supabase history read failed.");
-    rows.push(...data);
+    // Rozmowa zajęta przez trwające właśnie pierwsze pytanie nie ma jeszcze wiadomości.
+    rows.push(...data.filter((row) => (row.messages[0]?.count ?? 0) > 0));
     if (data.length < 500) return rows;
   }
 }
@@ -154,19 +185,12 @@ export async function saveChatTurn(
   const userContent = messageContent(question);
   const signal = AbortSignal.timeout(10_000);
 
+  // Zwykle rozmowa jest już zajęta na początku żądania (claimConversation); zapisujemy tylko do własnej.
   let conversationId = await findConversation(owner, chatId, signal);
   if (conversationId === null) {
-    const { data, error } = await owner.db.from("conversations")
-      .insert({ session_scope: sessionScope(owner), chat_id: chatId, title: userContent.trim().slice(0, 100) })
-      .select("id")
-      .abortSignal(signal)
-      .single()
-      .overrideTypes<{ id: number }, { merge: false }>();
-    // 23505: ta sama rozmowa właśnie powstała w równoległym żądaniu.
-    if (error?.code === "23505") conversationId = await findConversation(owner, chatId, signal);
-    else if (error || !data) throw new Error("Supabase conversation insert failed.");
-    else conversationId = data.id;
-    if (conversationId === null) throw new Error("Supabase conversation insert failed.");
+    if (await claimConversation(owner, chatId, question) === "taken") throw new Error("Conversation belongs to another user.");
+    conversationId = await findConversation(owner, chatId, signal);
+    if (conversationId === null) throw new Error("Supabase conversation read failed.");
   }
 
   // Para pytanie–odpowiedź; ponowny zapis tej samej tury niczego nie dubluje.

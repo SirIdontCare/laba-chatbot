@@ -10,15 +10,19 @@ require.extensions['.ts'] = (module, filename) => {
 // Wszystkie adresy i klucze są fałszywe; każdy fetch jest atrapą, nic nie trafia do OpenRouter ani Supabase.
 Object.assign(process.env, { NODE_ENV: 'development', VERCEL: '', VERCEL_PROJECT_PRODUCTION_URL: '',
   SESSION_SECRET: 'kb-offline-session-secret-32-characters!',
-  OPENROUTER_API_KEY: 'fake-openrouter-key', OPENROUTER_EMBEDDING_MODEL: 'test/embedding-model',
-  SUPABASE_URL: 'http://supabase.test', SUPABASE_SECRET_KEY: 'fake-supabase-key' });
-const { installFakeAuth, TEST_AUTH_COOKIE } = require('./fake-auth.cjs');
+  OPENROUTER_API_KEY: 'fake-openrouter-key', OPENROUTER_EMBEDDING_MODEL: 'test/embedding-model' });
+const { installFakeAuth, testUser, TEST_USER, TEST_AUTH_COOKIE, USER_DB_URL, USER_DB_TOKEN } = require('./fake-auth.cjs');
 installFakeAuth();
 const { saveDocument, listDocuments, KB_MESSAGES, BACKFILL_LIMIT } = require('../lib/knowledge-base.ts');
 const { readUploadEvents, STAGE_LABELS } = require('../lib/upload-stream.ts');
 const { EMBEDDING_DIMENSIONS } = require('../lib/model.ts');
 const { POST: upload, DELETE: remove } = require('../app/api/upload/route.ts');
 
+// Baza wiedzy zalogowanej osoby; wiersze innej osoby są niewidoczne jak przy RLS.
+const owner = testUser();
+const OTHER_USER = '22222222-aaaa-4bbb-8ccc-dddddddddddd';
+const own = (row) => ({ user_id: TEST_USER.id, ...row });
+const visible = (row) => row.user_id === TEST_USER.id;
 const vector = (seed) => Array.from({ length: EMBEDDING_DIMENSIONS }, (_, i) => (seed + i) / 10_000);
 
 // Minimalna atrapa PostgREST (tabele documents i chunks) i endpointu embeddingów OpenRouter.
@@ -40,12 +44,12 @@ function filters(url) {
     const raw = rest.join('.');
     out.push(row => op === 'eq' ? String(row[key]) === raw : op === 'is' && raw === 'null' ? row[key] == null : true);
   }
-  return row => out.every(match => match(row));
+  return row => visible(row) && out.every(match => match(row));
 }
 
 function withCounts(table, url, rows) {
   if (table !== 'documents' || !url.searchParams.get('select')?.includes('chunks(count)')) return rows;
-  return rows.map(row => ({ ...row, chunks: [{ count: db.chunks.filter(chunk => chunk.document_id === row.id).length }] }));
+  return rows.map(row => ({ ...row, chunks: [{ count: db.chunks.filter(chunk => visible(chunk) && chunk.document_id === row.id).length }] }));
 }
 
 async function fakeFetch(input, init = {}) {
@@ -59,7 +63,11 @@ async function fakeFetch(input, init = {}) {
     log.push('embeddings');
     return embedResponse(body.input);
   }
-  assert.equal(url.hostname, 'supabase.test', `nieoczekiwany adres ${url}`);
+  // Tylko baza zalogowanej osoby z jej tokenem; nigdy klucz secret. user_id wpisuje baza.
+  assert.equal(url.origin, USER_DB_URL, `nieoczekiwany adres ${url}`);
+  assert.equal(new Headers(init.headers).get('authorization'), `Bearer ${USER_DB_TOKEN}`);
+  if (init.body) for (const row of [JSON.parse(init.body)].flat()) assert.equal('user_id' in row, false);
+  if ((init.method ?? 'GET').toUpperCase() !== 'POST') assert.equal(url.searchParams.get('user_id'), `eq.${TEST_USER.id}`);
   const table = url.pathname.replace('/rest/v1/', '');
   log.push(`${method} ${table}`);
   const rows = db[table];
@@ -79,7 +87,7 @@ async function fakeFetch(input, init = {}) {
     const body = [JSON.parse(init.body)].flat();
     if (table === 'chunks' && db.failChunkInsert) return Response.json({ message: 'insert failed' }, { status: 500 });
     const created = body.map(row => ({ ...(table === 'chunks' ? { embedding: null } : { created_at: '2026-11-19T20:00:00Z' }),
-      ...row, id: db.nextId[table]++ }));
+      ...row, id: db.nextId[table]++, user_id: TEST_USER.id }));
     rows.push(...created);
     return reply(created, 201);
   }
@@ -114,10 +122,10 @@ async function events(response) {
   return all;
 }
 const seedOld = () => {
-  db.documents.push({ id: 50, title: 'Regulamin', created_at: '2026-11-01T10:00:00Z' });
+  db.documents.push(own({ id: 50, title: 'Regulamin', created_at: '2026-11-01T10:00:00Z' }));
   db.chunks.push(
-    { id: 10, document_id: 50, chunk_index: 0, content: 'Stara wersja A.', embedding: vector(500) },
-    { id: 11, document_id: 50, chunk_index: 1, content: 'Stara wersja B.', embedding: vector(501) },
+    own({ id: 10, document_id: 50, chunk_index: 0, content: 'Stara wersja A.', embedding: vector(500) }),
+    own({ id: 11, document_id: 50, chunk_index: 1, content: 'Stara wersja B.', embedding: vector(501) }),
   );
 };
 
@@ -138,7 +146,7 @@ test('sukces: etapy po kolei, jedno embedMany, fragmenty zapisane z wektorami', 
 
 test('etapy odpowiadają prawdziwej pracy: embed przed modelem, save przed zapisem', async (t) => {
   t.mock.method(global, 'fetch', fakeFetch);
-  await saveDocument({ title: 'X', content: 'Tekst.' }, { onStage: stage => log.push(`stage:${stage}`) });
+  await saveDocument(owner, { title: 'X', content: 'Tekst.' }, { onStage: stage => log.push(`stage:${stage}`) });
   assert.deepEqual(log, ['stage:split', 'stage:embed', 'GET chunks', 'embeddings', 'stage:save', 'POST documents', 'POST chunks']);
   assert.deepEqual(Object.values(STAGE_LABELS), ['Dzielę tekst…', 'Tworzę embeddingi…', 'Zapisuję…']);
 });
@@ -159,12 +167,12 @@ test('zła długość wektora i błąd zapisu fragmentów nie zostawiają dokume
   t.mock.method(global, 'fetch', fakeFetch);
   embedResponse = (input) => Response.json({ object: 'list', model: 'x',
     data: input.map((_, index) => ({ object: 'embedding', index, embedding: [0.1, 0.2] })) });
-  await assert.rejects(saveDocument({ title: 'Krótkie', content: 'Tekst.' }), { message: KB_MESSAGES.embeddings, stage: 'embed' });
+  await assert.rejects(saveDocument(owner, { title: 'Krótkie', content: 'Tekst.' }), { message: KB_MESSAGES.embeddings, stage: 'embed' });
   assert.deepEqual(db.documents, []);
   embedResponse = (input) => Response.json({ object: 'list', model: 'x',
     data: input.map((_, index) => ({ object: 'embedding', index, embedding: vector(index) })) });
   db.failChunkInsert = true;
-  await assert.rejects(saveDocument({ title: 'X', content: 'Tekst.' }), { message: KB_MESSAGES.chunks, stage: 'save' });
+  await assert.rejects(saveDocument(owner, { title: 'X', content: 'Tekst.' }), { message: KB_MESSAGES.chunks, stage: 'save' });
   assert.deepEqual(db.documents, []);
 });
 
@@ -234,8 +242,8 @@ test('usuwanie: sesja, ten sam origin, poprawny identyfikator, dokument z fragme
 test('lista dokumentów: tytuł, data wersji i liczba fragmentów, najnowsze najpierw', async (t) => {
   t.mock.method(global, 'fetch', fakeFetch);
   seedOld();
-  db.documents.push({ id: 51, title: 'Cennik', created_at: '2026-11-18T09:00:00Z' });
-  assert.deepEqual(await listDocuments(), [
+  db.documents.push(own({ id: 51, title: 'Cennik', created_at: '2026-11-18T09:00:00Z' }));
+  assert.deepEqual(await listDocuments(owner), [
     { id: 51, title: 'Cennik', created_at: '2026-11-18T09:00:00Z', chunks: 0 },
     { id: 50, title: 'Regulamin', created_at: '2026-11-01T10:00:00Z', chunks: 2 },
   ]);
@@ -243,13 +251,13 @@ test('lista dokumentów: tytuł, data wersji i liczba fragmentów, najnowsze naj
 
 test('uzupełnia puste embeddingi starszych fragmentów w tym samym wywołaniu', async (t) => {
   t.mock.method(global, 'fetch', fakeFetch);
-  db.documents.push({ id: 50, title: 'Stary', created_at: '2026-11-01T10:00:00Z' });
+  db.documents.push(own({ id: 50, title: 'Stary', created_at: '2026-11-01T10:00:00Z' }));
   db.chunks.push(
-    { id: 10, document_id: 50, chunk_index: 0, content: 'Stary bez wektora A.', embedding: null },
-    { id: 11, document_id: 50, chunk_index: 1, content: 'Stary z wektorem.', embedding: vector(999) },
-    { id: 12, document_id: 50, chunk_index: 2, content: 'Stary bez wektora B.', embedding: null },
+    own({ id: 10, document_id: 50, chunk_index: 0, content: 'Stary bez wektora A.', embedding: null }),
+    own({ id: 11, document_id: 50, chunk_index: 1, content: 'Stary z wektorem.', embedding: vector(999) }),
+    own({ id: 12, document_id: 50, chunk_index: 2, content: 'Stary bez wektora B.', embedding: null }),
   );
-  const result = await saveDocument({ title: 'Nowy', content: 'Nowy akapit.' });
+  const result = await saveDocument(owner, { title: 'Nowy', content: 'Nowy akapit.' });
   assert.equal(result.backfilled, 2);
   assert.equal(embedCalls.length, 1);
   assert.deepEqual(embedCalls[0], ['Nowy akapit.', 'Stary bez wektora A.', 'Stary bez wektora B.']);
@@ -262,9 +270,9 @@ test('uzupełnia puste embeddingi starszych fragmentów w tym samym wywołaniu',
 test('uzupełnianie jest ograniczone do BACKFILL_LIMIT fragmentów na import', async (t) => {
   t.mock.method(global, 'fetch', fakeFetch);
   for (let i = 0; i < BACKFILL_LIMIT + 5; i++) {
-    db.chunks.push({ id: 1000 + i, document_id: 50, chunk_index: i, content: `Stary ${i}.`, embedding: null });
+    db.chunks.push(own({ id: 1000 + i, document_id: 50, chunk_index: i, content: `Stary ${i}.`, embedding: null }));
   }
-  const result = await saveDocument({ title: 'Nowy', content: 'Nowy.' });
+  const result = await saveDocument(owner, { title: 'Nowy', content: 'Nowy.' });
   assert.equal(result.backfilled, BACKFILL_LIMIT);
   assert.equal(embedCalls[0].length, BACKFILL_LIMIT + 1);
   assert.equal(db.chunks.filter(chunk => chunk.embedding == null).length, 5);
@@ -280,4 +288,22 @@ test('readUploadEvents: zdarzenia pocięte w dowolnym miejscu i urwany strumień
   assert.deepEqual(last, { type: 'error', stage: 'embed', message: 'Błąd' });
   const cut = new TextEncoder().encode('{"type":"stage","stage":"split"}\n{"type":"stage","stage":"embed"}\n');
   assert.equal(await readUploadEvents(stream([cut]), () => {}), null);
+});
+
+test('cudzy dokument: niewidoczny na liście, nie do usunięcia (404), ten sam tytuł nie koliduje', async (t) => {
+  t.mock.method(global, 'fetch', fakeFetch);
+  db.documents.push({ id: 70, user_id: OTHER_USER, title: 'Regulamin', created_at: '2026-11-10T10:00:00Z' });
+  db.chunks.push({ id: 700, user_id: OTHER_USER, document_id: 70, chunk_index: 0, content: 'Tajny regulamin A.', embedding: null });
+  assert.deepEqual(await listDocuments(owner), []);
+  const removed = await remove(await deleteRequest('document=70'));
+  assert.equal(removed.status, 404);
+  assert.doesNotMatch(await removed.text(), /Tajny|Regulamin/);
+  // Ten sam tytuł u innej osoby nie wymaga potwierdzenia zastąpienia i nie dotyka jej dokumentu.
+  const all = await events(await upload(await uploadRequest({ title: 'Regulamin', content: 'Mój regulamin.' })));
+  assert.equal(all.at(-1).type, 'done');
+  assert.equal(all.at(-1).document.replaced, 0);
+  // Fragment innej osoby bez wektora nie trafia do uzupełniania embeddingów.
+  assert.deepEqual(embedCalls[0], ['Mój regulamin.']);
+  assert.deepEqual(db.documents.filter(doc => doc.user_id === OTHER_USER).map(doc => doc.id), [70]);
+  assert.deepEqual(db.chunks.filter(chunk => chunk.user_id === OTHER_USER).map(chunk => chunk.content), ['Tajny regulamin A.']);
 });

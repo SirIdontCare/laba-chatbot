@@ -8,16 +8,17 @@ import {
 } from "../../../lib/knowledge-base";
 import type { UploadStreamEvent } from "../../../lib/upload-stream";
 
+// Weryfikacja użytkownika przed odczytem danych i przed bazą. Zwraca zalogowaną osobę albo odpowiedź z błędem.
 async function authorize(request: Request) {
-  // Weryfikacja użytkownika przed odczytem danych i przed bazą.
-  if (!await requestUser(request)) return new Response(AUTH_MESSAGES.unauthorized, { status: 401 });
-  if (!sameOrigin(request)) return new Response(AUTH_MESSAGES.origin, { status: 403 });
-  return null;
+  const user = await requestUser(request);
+  if (!user) return { denied: new Response(AUTH_MESSAGES.unauthorized, { status: 401 }) };
+  if (!sameOrigin(request)) return { denied: new Response(AUTH_MESSAGES.origin, { status: 403 }) };
+  return { user };
 }
 
 export async function POST(request: Request) {
-  const denied = await authorize(request);
-  if (denied) return denied;
+  const { user, denied } = await authorize(request);
+  if (!user) return denied;
   let input;
   try { input = uploadSchema.safeParse(await request.json()); }
   catch { return new Response("Nieprawidłowe dane formularza.", { status: 400 }); }
@@ -25,7 +26,7 @@ export async function POST(request: Request) {
     return new Response("Uzupełnij tytuł (do 200 znaków) i treść (do 20 000 znaków).", { status: 400 });
   }
   let existing;
-  try { existing = await findDocumentsByTitle(input.data.title); }
+  try { existing = await findDocumentsByTitle(user, input.data.title); }
   catch { return new Response("Nie udało się sprawdzić, czy dokument już istnieje. Nic nie zostało zapisane. Spróbuj ponownie za chwilę.", { status: 503 }); }
   // Dokument o tym tytule już jest: zastępujemy go tylko po potwierdzeniu użytkownika.
   if (existing.length && !input.data.replace) return Response.json({ existing }, { status: 409 });
@@ -38,7 +39,7 @@ export async function POST(request: Request) {
       // Strumień NDJSON: zdarzenia "stage" po kolei, na końcu "done" albo "error" z etapem i komunikatem.
       const send = (event: UploadStreamEvent) => controller.enqueue(encoder.encode(`${JSON.stringify(event)}\n`));
       try {
-        const document = await saveDocument(data, {
+        const document = await saveDocument(user, data, {
           replaceIds: existing.map(doc => doc.id),
           onStage: next => { stage = next; send({ type: "stage", stage: next }); },
         });
@@ -59,12 +60,13 @@ export async function POST(request: Request) {
 }
 
 export async function DELETE(request: Request) {
-  const denied = await authorize(request);
-  if (denied) return denied;
+  const { user, denied } = await authorize(request);
+  if (!user) return denied;
   const input = z.coerce.number().int().positive().safeParse(new URL(request.url).searchParams.get("document"));
   if (!input.success) return new Response("Nieprawidłowy dokument.", { status: 400 });
   try {
-    if (!await deleteDocument(input.data)) return new Response("Ten dokument został już usunięty.", { status: 404 });
+    // Brak dokumentu albo dokument innej osoby: ten sam wynik, bez żadnych danych.
+    if (!await deleteDocument(user, input.data)) return new Response("Nie znaleziono dokumentu. Mógł zostać już usunięty.", { status: 404 });
     return new Response(null, { status: 204 });
   } catch {
     return new Response("Nie udało się usunąć dokumentu. Spróbuj ponownie.", { status: 503 });

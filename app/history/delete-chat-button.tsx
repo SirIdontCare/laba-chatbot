@@ -14,7 +14,8 @@ export default function DeleteChatButton({ chatId, title }: { chatId: string; ti
     try {
       const response = await fetch(`/api/history?chat=${chatId}`, { method: "DELETE" });
       if (response.status === 401) { window.location.replace("/"); return; }
-      if (!response.ok) throw new Error();
+      // 404: rozmowy już nie ma (albo nie należy do tego konta) — odświeżamy listę.
+      if (!response.ok && response.status !== 404) throw new Error();
       router.refresh();
     } catch {
       setError("Nie udało się usunąć rozmowy. Spróbuj ponownie.");
