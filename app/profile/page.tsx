@@ -8,7 +8,7 @@ import ProfileEditor from "./profile-editor";
 export default async function ProfilePage() {
   const user = await currentUser();
   if (!user) redirect(loginPath("/profile"));
-  const header = <header className="chat-header"><h1>Profil</h1><UserMenu email={user.email} /></header>;
+  const header = <header className="chat-header"><h1>Profil</h1><UserMenu account={user.account} /></header>;
   let profile;
   try { profile = await loadUserProfile(user); }
   catch { return <main className="chat">{header}<p role="alert">Nie udało się wczytać profilu. Odśwież stronę.</p><a href="/">Wróć do czatu</a></main>; }

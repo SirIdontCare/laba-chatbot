@@ -18,14 +18,14 @@ export default async function Home({ searchParams }: {
   const emptyChat = { id: randomUUID(), messages: [] };
   let profileName: string | null = null;
   try { profileName = (await loadUserProfile(user)).name; } catch {}
-  if (params.new === "1") return <ChatClient key={emptyChat.id} initialChat={emptyChat} profileName={profileName} email={user.email} />;
+  if (params.new === "1") return <ChatClient key={emptyChat.id} initialChat={emptyChat} profileName={profileName} account={user.account} />;
   if (params.chat && !z.uuid().safeParse(params.chat).success) notFound();
   let chat;
   try {
     chat = await loadLatestChat(user, params.chat);
   } catch {
-    return <ChatClient initialChat={emptyChat} historyError={CHAT_ERRORS.history} profileName={profileName} email={user.email} />;
+    return <ChatClient initialChat={emptyChat} historyError={CHAT_ERRORS.history} profileName={profileName} account={user.account} />;
   }
   if (params.chat && !chat) notFound();
-  return <ChatClient key={chat?.id ?? emptyChat.id} initialChat={chat ?? emptyChat} profileName={profileName} email={user.email} />;
+  return <ChatClient key={chat?.id ?? emptyChat.id} initialChat={chat ?? emptyChat} profileName={profileName} account={user.account} />;
 }

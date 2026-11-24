@@ -15,6 +15,7 @@ import { imageToolInputSchema, imageToolOutputSchema, inspectionOutputSchema } f
 import { usedKnowledgeFragments } from "../lib/knowledge-schema";
 import KnowledgeSources from "./knowledge-sources";
 import UserMenu from "./user-menu";
+import type { AccountSummary } from "../lib/account";
 import { loginPath } from "../lib/redirect-target";
 
 const transport = new DefaultChatTransport<ChatMessage>({
@@ -49,11 +50,11 @@ function readPhoto(file: File): Promise<FileUIPart> {
   });
 }
 
-export default function ChatClient({ initialChat, historyError, profileName, email }: {
+export default function ChatClient({ initialChat, historyError, profileName, account }: {
   initialChat: { id: string; messages: ChatMessage[] };
   historyError?: string;
   profileName?: string | null;
-  email: string | null;
+  account: AccountSummary;
 }) {
   const chatId = useRef(initialChat.id);
   useEffect(() => {
@@ -176,7 +177,7 @@ export default function ChatClient({ initialChat, historyError, profileName, ema
             <p className="header-description">Rozmawiaj, odkrywaj i twórz z pomocą AI.</p></div>
         </div>
         <div className="header-actions"><a href="/profile">Profil</a><a href="/history">Historia</a><a href="/upload">Baza wiedzy</a><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
-        <UserMenu email={email} onBeforeLogout={beforeLogout} onLeavingChange={setLeaving} /></div>
+        <UserMenu account={account} onBeforeLogout={beforeLogout} onLeavingChange={setLeaving} /></div>
       </header>
       <nav className="mode-switch" aria-label="Tryb pracy">
         <button type="button" aria-pressed={mode === "chat"} onClick={() => setMode("chat")} disabled={waiting || analysisBusy || leaving}>Zwykły czat</button>

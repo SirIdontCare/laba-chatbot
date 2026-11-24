@@ -167,3 +167,10 @@ textarea { width: 100%; resize: vertical; line-height: 1.6; }
 .user-menu .error { flex-basis: 100%; margin: 0; }
 /* Po wylogowaniu i przy powrocie „Wstecz” treść jest ukryta do czasu ponownego sprawdzenia sesji. */
 html[data-signed-out] body { visibility: hidden; }
+.google-login { margin-top: 24px; }
+.google-login button { width: 100%; }
+.auth-divider { display: flex; align-items: center; gap: 12px; margin: 20px 0 0; color: var(--muted); font-size: 12px; }
+.auth-divider::before, .auth-divider::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+.login .auth-divider + form { margin-top: 16px; }
+.user-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
+.user-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }

@@ -20,7 +20,7 @@ export default async function HistoryPage() {
   });
   return (
     <main className="chat">
-      <header className="chat-header"><h1>Historia</h1><div className="header-actions"><a className="secondary-button" href="/?new=1">Nowa rozmowa</a><UserMenu email={user.email} /></div></header>
+      <header className="chat-header"><h1>Historia</h1><div className="header-actions"><a className="secondary-button" href="/?new=1">Nowa rozmowa</a><UserMenu account={user.account} /></div></header>
       <Link href="/">Wróć do czatu</Link>
       {chats.length === 0 ? <p>Od czego zaczynamy? Zadaj pytanie lub opisz zadanie — pomogę Ci znaleźć informacje i przejść do działania. Wybierz „Nowa rozmowa”.</p> : (
         <ul className="history-list">

@@ -21,7 +21,7 @@ export default async function UploadPage() {
   try { documents = await listDocuments(user); } catch { documents = null; }
   const format = new Intl.DateTimeFormat("pl-PL", { dateStyle: "medium", timeStyle: "short", timeZone: "Europe/Warsaw" });
   return <main className="chat">
-    <header className="chat-header"><h1>Baza wiedzy</h1><UserMenu email={user.email} /></header>
+    <header className="chat-header"><h1>Baza wiedzy</h1><UserMenu account={user.account} /></header>
     <Link href="/">Wróć do czatu</Link>
     <p>Wklej dokument. Każdy akapit (tekst oddzielony pustą linią) zostanie zapisany jako osobny fragment razem z embeddingiem do wyszukiwania.
       Dokument o tytule, który już jest w bazie, zastąpi poprzednią wersję (zapytam o potwierdzenie).</p>

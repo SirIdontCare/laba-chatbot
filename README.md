@@ -70,6 +70,8 @@ Strona `/login` ma zakładki „Zaloguj się” i „Załóż konto”. Hasło n
 - Wejście na chronioną stronę bez logowania prowadzi na `/login?next=…`, a po zalogowaniu lub rejestracji aplikacja wraca pod ten adres. Przyjmowane są tylko ścieżki tej aplikacji (`lib/redirect-target.ts`); adresy innych stron, `/api/` i `/auth/` są ignorowane.
 - Podczas logowania i rejestracji przycisk jest zablokowany i pokazuje „Chwileczkę…”.
 - Limity prób logowania i rejestracji zapewnia Supabase Auth (Authentication → Rate Limits).
+- „Zaloguj przez Google” (PKCE po stronie serwera): formularz wysyła `POST /auth/google`, serwer pobiera od Supabase adres logowania u Google (weryfikator PKCE trafia do ciasteczka) i przekierowuje do Google. Powrót trafia na `/auth/callback`, który wymienia kod na sesję i przenosi do czatu albo do zapamiętanej ścieżki tej aplikacji. Adres powrotu powstaje z adresu, pod którym aplikacja działa (nagłówek `Host`), więc w Supabase → Authentication → URL Configuration → Redirect URLs muszą być np. `http://localhost:3000/auth/callback**` i adres produkcyjny `https://…/auth/callback**`. Client ID i Client Secret Google są tylko w panelu Supabase. Anulowanie albo błąd wraca na `/login` z komunikatem po polsku.
+- Nagłówek pokazuje imię i avatar z `user_metadata` konta (`full_name`/`name`, `avatar_url`/`picture`; tylko adresy https), a dla kont e-mail sam e-mail.
 
 `CHAT_PASSWORD` i `SESSION_SECRET` nie są już używane.
 

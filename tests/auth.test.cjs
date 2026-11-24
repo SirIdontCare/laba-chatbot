@@ -32,6 +32,10 @@ const { sameOrigin } = require("../lib/request-origin.ts");
 const { updateSession } = require("../lib/supabase-proxy.ts");
 const { AUTH_MESSAGES, authErrorMessage, MIN_PASSWORD_LENGTH } = require("../lib/auth-messages.ts");
 const { safeNextPath, loginPath } = require("../lib/redirect-target.ts");
+const { POST: googleStart } = require("../app/auth/google/route.ts");
+const { GET: googleCallback } = require("../app/auth/callback/route.ts");
+const { accountFromClaims } = require("../lib/account.ts");
+const { loginErrorMessage, oauthHashErrorMessage } = require("../lib/auth-messages.ts");
 const { NextRequest } = require("next/server");
 
 const origin = "http://localhost:3000";
@@ -66,6 +70,14 @@ function signIn(user) {
   return { token, cookie: sessionCookie(token, user) };
 }
 
+// Konto Google w atrapie. Pola user_metadata jak w danych Supabase dla Google (dane testowe).
+const GOOGLE_CODE = "kod-od-google";
+const googleUser = { id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", email: "gosia@example.com", sessionId: "s-google" };
+const GOOGLE_METADATA = { iss: "https://accounts.google.com", sub: "1234567890", name: "Gosia Testowa", full_name: "Gosia Testowa",
+  email: "gosia@example.com", email_verified: true, picture: "https://lh3.googleusercontent.com/a/test-photo",
+  avatar_url: "https://lh3.googleusercontent.com/a/test-photo", provider_id: "1234567890", phone_verified: false };
+const pkceRequests = [];
+
 // Atrapa Supabase Auth: /user potwierdza tylko wydane i nieunieważnione tokeny.
 function authServer(t) {
   const calls = [];
@@ -80,6 +92,19 @@ function authServer(t) {
       }
       return Response.json({ id: user.id, aud: "authenticated", role: "authenticated", email: user.email,
         app_metadata: {}, user_metadata: {}, created_at: "2026-01-01T00:00:00Z" });
+    }
+    if (url === `${SUPABASE_URL}/auth/v1/token?grant_type=pkce`) {
+      // Wymiana kodu od Google: tylko znany kod i niepusty weryfikator PKCE dają sesję.
+      const body = JSON.parse(init.body);
+      pkceRequests.push(body);
+      if (body.auth_code !== GOOGLE_CODE || !body.code_verifier) {
+        return Response.json({ code: 400, error_code: "bad_code_verifier", msg: "invalid flow state" }, { status: 400 });
+      }
+      const token = accessToken(googleUser, { user_metadata: GOOGLE_METADATA });
+      issued.set(token, googleUser);
+      return Response.json({ access_token: token, token_type: "bearer", expires_in: 3600, expires_at: now() + 3600,
+        refresh_token: "google-refresh", user: { id: googleUser.id, aud: "authenticated", role: "authenticated",
+          email: googleUser.email, app_metadata: { provider: "google" }, user_metadata: GOOGLE_METADATA } });
     }
     if (url.startsWith(`${SUPABASE_URL}/auth/v1/token`)) {
       return Response.json({ code: 400, error_code: "refresh_token_not_found", msg: "Invalid Refresh Token" }, { status: 400 });
@@ -258,4 +283,99 @@ test("błędy logowania i rejestracji po polsku", () => {
   assert.equal(authErrorMessage({ code: "over_request_rate_limit", status: 429 }), AUTH_MESSAGES.rateLimited);
   assert.equal(authErrorMessage({ name: "AuthRetryableFetchError", status: 0 }), AUTH_MESSAGES.network);
   assert.equal(authErrorMessage({ code: "cos_nowego", message: "Something else" }), AUTH_MESSAGES.unknown);
+});
+
+// ---- Logowanie przez Google (PKCE po stronie serwera) ----
+const startGoogle = (next, { host = "localhost:3000", source = `http://${host}` } = {}) => googleStart(new NextRequest(`http://${host}/auth/google`, {
+  method: "POST", headers: { origin: source, host, "content-type": "application/x-www-form-urlencoded" },
+  body: next === undefined ? "" : `next=${encodeURIComponent(next)}`,
+}));
+const callback = (query, cookie = "", host = "localhost:3000") => googleCallback(new NextRequest(`http://${host}/auth/callback?${query}`, {
+  headers: { host, ...(cookie ? { cookie } : {}) },
+}));
+const cookiePairs = (response) => response.headers.getSetCookie().map((line) => line.split(";")[0]);
+
+test("Google: start buduje adres powrotu z bieżącego adresu i zapisuje weryfikator PKCE", async (t) => {
+  const calls = authServer(t);
+  const response = await startGoogle("/upload");
+  assert.equal(response.status, 303);
+  const location = new URL(response.headers.get("location"));
+  assert.equal(location.origin + location.pathname, `${SUPABASE_URL}/auth/v1/authorize`);
+  assert.equal(location.searchParams.get("provider"), "google");
+  assert.equal(location.searchParams.get("redirect_to"), "http://localhost:3000/auth/callback?next=%2Fupload");
+  assert.ok(location.searchParams.get("code_challenge"));
+  assert.equal(location.searchParams.get("code_challenge_method"), "s256");
+  assert.ok(cookiePairs(response).some((pair) => pair.startsWith(`${COOKIE_NAME}-code-verifier=`)));
+  assert.deepEqual(calls, [], "start nie potrzebuje sieci");
+  // Inny adres aplikacji (np. 127.0.0.1 albo domena produkcyjna) → ten sam adres w powrocie.
+  const local = new URL((await startGoogle("/history", { host: "127.0.0.1:3000" })).headers.get("location"));
+  assert.equal(local.searchParams.get("redirect_to"), "http://127.0.0.1:3000/auth/callback?next=%2Fhistory");
+  // Adres powrotu tylko wewnątrz aplikacji.
+  for (const next of ["//evil.example", "https://evil.example/x", "/api/agent", undefined]) {
+    const redirect = new URL((await startGoogle(next)).headers.get("location")).searchParams.get("redirect_to");
+    assert.equal(redirect, "http://localhost:3000/auth/callback", String(next));
+  }
+  // Żądanie z obcej strony nie startuje logowania.
+  assert.equal((await startGoogle("/upload", { source: "https://evil.example" })).status, 403);
+});
+
+test("Google: /auth/callback wymienia kod na sesję i wraca pod zapamiętany adres", async (t) => {
+  authServer(t);
+  const start = await startGoogle("/upload");
+  const verifier = cookiePairs(start).find((pair) => pair.startsWith(`${COOKIE_NAME}-code-verifier=`));
+  pkceRequests.length = 0;
+  const response = await callback(`code=${GOOGLE_CODE}&next=%2Fupload`, verifier);
+  assert.equal(response.status, 307);
+  assert.equal(response.headers.get("location"), "http://localhost:3000/upload");
+  assert.equal(pkceRequests.length, 1);
+  assert.equal(pkceRequests[0].auth_code, GOOGLE_CODE);
+  assert.ok(pkceRequests[0].code_verifier.length >= 43);
+  assert.match(response.headers.get("cache-control") ?? "", /no-store/);
+  const session = cookiePairs(response).find((pair) => pair.startsWith(`${COOKIE_NAME}=`));
+  assert.ok(session, "sesja w ciasteczku");
+  // Nowa sesja przechodzi weryfikację serwera; nagłówek dostaje imię i avatar z konta Google.
+  const user = await requestUser(request("POST", "/api/agent", chatBody, session));
+  assert.equal(user.id, googleUser.id);
+  assert.deepEqual(user.account, { email: "gosia@example.com", name: "Gosia Testowa",
+    avatarUrl: "https://lh3.googleusercontent.com/a/test-photo" });
+  // Niebezpieczny adres powrotu → czat.
+  const unsafe = await callback(`code=${GOOGLE_CODE}&next=%2F%2Fevil.example`, verifier);
+  assert.equal(unsafe.headers.get("location"), "http://localhost:3000/");
+});
+
+test("Google: anulowanie i błędy wracają na /login z komunikatem, bez sesji", async (t) => {
+  authServer(t);
+  const target = async (query, cookie) => {
+    const response = await callback(query, cookie);
+    assert.equal(response.status, 307);
+    assert.ok(!cookiePairs(response).some((pair) => pair.startsWith(`${COOKIE_NAME}=base64-`)), "bez sesji");
+    const location = new URL(response.headers.get("location"));
+    return `${location.pathname}?${location.searchParams}`;
+  };
+  assert.equal(await target("error=access_denied&error_description=User+cancelled&next=%2Fupload"), "/login?next=%2Fupload&error=google_cancelled");
+  assert.equal(await target("next=%2Fupload"), "/login?next=%2Fupload&error=google");
+  assert.equal(await target("error=server_error"), "/login?error=google");
+  // Zły kod albo brak weryfikatora (np. logowanie rozpoczęte w innej przeglądarce).
+  const verifier = cookiePairs(await startGoogle("/upload")).find((pair) => pair.startsWith(`${COOKIE_NAME}-code-verifier=`));
+  assert.equal(await target("code=zly-kod", verifier), "/login?error=google");
+  assert.equal(await target(`code=${GOOGLE_CODE}`), "/login?error=google");
+  // Komunikaty po polsku, także gdy błąd przychodzi w części adresu po „#”.
+  assert.equal(loginErrorMessage("google_cancelled"), "Logowanie przez Google zostało anulowane. Możesz spróbować ponownie.");
+  assert.match(loginErrorMessage("google"), /Nie udało się zalogować przez Google/);
+  assert.equal(loginErrorMessage("cokolwiek"), "");
+  assert.equal(oauthHashErrorMessage("#error=access_denied&error_code=403&error_description=x"), loginErrorMessage("google_cancelled"));
+  assert.equal(oauthHashErrorMessage("#error=server_error&error_code=500"), loginErrorMessage("google"));
+  assert.equal(oauthHashErrorMessage(""), "");
+});
+
+test("nagłówek: imię i avatar tylko z bezpiecznych pól", () => {
+  assert.deepEqual(accountFromClaims("a@example.com", { full_name: "Ala", avatar_url: "https://lh3.googleusercontent.com/a/x" }),
+    { email: "a@example.com", name: "Ala", avatarUrl: "https://lh3.googleusercontent.com/a/x" });
+  assert.deepEqual(accountFromClaims("a@example.com", { name: "Ala", picture: "https://example.com/p.png" }),
+    { email: "a@example.com", name: "Ala", avatarUrl: "https://example.com/p.png" });
+  for (const avatar of ["http://example.com/p.png", "javascript:alert(1)", "data:image/png;base64,AAAA", "nie-adres"]) {
+    assert.equal(accountFromClaims(null, { avatar_url: avatar }).avatarUrl, null, avatar);
+  }
+  assert.deepEqual(accountFromClaims("e@example.com", undefined), { email: "e@example.com", name: null, avatarUrl: null });
+  assert.equal(accountFromClaims(null, { full_name: "x".repeat(300) }).name.length, 100);
 });

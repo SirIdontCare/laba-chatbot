@@ -3,7 +3,9 @@ import { cache } from "react";
 import { cookies } from "next/headers";
 import { createServerClient, parseCookieHeader, type CookieOptions } from "@supabase/ssr";
 import { createClient as createSupabaseClient, type SupabaseClient } from "@supabase/supabase-js";
+import { NextResponse } from "next/server";
 import { supabaseAuthConfig } from "./supabase-config";
+import { accountFromClaims, type AccountSummary } from "./account";
 
 // Tożsamość ustala wyłącznie serwer: z podpisanego tokenu Supabase zweryfikowanego
 // przez getClaims(), nigdy z formularza, adresu strony ani odpowiedzi modelu.
@@ -11,6 +13,8 @@ export type SignedInUser = {
   id: string;
   email: string | null;
   sessionId: string | null;
+  // Imię i avatar do nagłówka (np. z konta Google). Tylko do wyświetlania.
+  account: AccountSummary;
   // Baza danych jako ta osoba: klucz publishable + token z jej zweryfikowanej sesji.
   // Każde zapytanie przechodzi przez RLS, więc baza pokazuje i zmienia tylko jej wiersze.
   db: SupabaseClient;
@@ -68,9 +72,11 @@ async function verify(client: ReturnType<typeof createClient>): Promise<SignedIn
     const accessToken = session?.access_token;
     if (!accessToken) return null;
     const userId = claims.sub;
+    const email = typeof claims.email === "string" && claims.email ? claims.email : null;
     return {
       id: userId,
-      email: typeof claims.email === "string" && claims.email ? claims.email : null,
+      email,
+      account: accountFromClaims(email, claims.user_metadata),
       sessionId: typeof claims.session_id === "string" ? claims.session_id : null,
       db: userDatabase(config, accessToken),
       stillSignedIn: async () => {
@@ -97,6 +103,34 @@ export const currentUser = cache(async (): Promise<SignedInUser | null> => {
 // Route Handlery: ciasteczka z bieżącego żądania. Odświeżoną sesję zapisuje cookies().
 export async function requestUser(request: Request): Promise<SignedInUser | null> {
   return verify(createClient(() => parseCookieHeader(request.headers.get("cookie") ?? "")));
+}
+
+// Route Handler zakończony przekierowaniem (start logowania Google, /auth/callback):
+// ciasteczka czytamy z żądania, a nowe (weryfikator PKCE, sesja po wymianie kodu)
+// dokładamy do odpowiedzi przekierowania razem z nagłówkami zakazu cache.
+export function createRedirectClient(request: Request) {
+  const config = supabaseAuthConfig();
+  if (!config) return null;
+  const pending: { name: string; value: string; options: CookieOptions }[] = [];
+  const headers: Record<string, string> = {};
+  const supabase = createServerClient(config.url, config.key, {
+    cookies: {
+      getAll: () => parseCookieHeader(request.headers.get("cookie") ?? ""),
+      setAll(cookiesToSet, cacheHeaders) {
+        pending.push(...cookiesToSet);
+        Object.assign(headers, cacheHeaders);
+      },
+    },
+  });
+  return {
+    supabase,
+    redirect(url: string | URL, status = 307) {
+      const response = NextResponse.redirect(url, status);
+      for (const { name, value, options } of pending) response.cookies.set(name, value, options);
+      for (const [key, value] of Object.entries(headers)) response.headers.set(key, value);
+      return response;
+    },
+  };
 }
 
 // Klient do zakończenia logowania w Route Handlerze (np. potwierdzenie e-maila).

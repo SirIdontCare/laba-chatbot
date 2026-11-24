@@ -6,6 +6,7 @@ const TEST_USER = Object.freeze({
   id: "11111111-1111-4111-8111-111111111111",
   email: "test@example.com",
   sessionId: "22222222-2222-4222-8222-222222222222",
+  account: Object.freeze({ email: "test@example.com", name: null, avatarUrl: null }),
 });
 const TEST_AUTH_COOKIE = "sb-test-auth-token=valid";
 // Baza "zalogowanej osoby" w testach: prawdziwy klient supabase-js z tokenem testowym.

@@ -17,8 +17,25 @@ export const AUTH_MESSAGES = {
   rateLimited: "Zbyt wiele prób. Odczekaj chwilę i spróbuj ponownie.",
   signupDisabled: "Zakładanie nowych kont jest wyłączone.",
   logoutFailed: "Nie udało się wylogować. Spróbuj ponownie.",
+  googleFailed: "Nie udało się zalogować przez Google. Spróbuj ponownie albo zaloguj się e-mailem.",
+  googleCancelled: "Logowanie przez Google zostało anulowane. Możesz spróbować ponownie.",
   unknown: "Nie udało się. Spróbuj ponownie.",
 } as const;
+
+// Komunikat dla /login?error=… (powrót z potwierdzenia e-maila albo z logowania Google).
+export function loginErrorMessage(code: unknown) {
+  if (code === "confirm") return AUTH_MESSAGES.confirmFailed;
+  if (code === "google_cancelled") return AUTH_MESSAGES.googleCancelled;
+  if (code === "google") return AUTH_MESSAGES.googleFailed;
+  return "";
+}
+
+// Błąd od dostawcy w części adresu po „#” (np. #error=access_denied&error_description=…).
+export function oauthHashErrorMessage(hash: string) {
+  const params = new URLSearchParams(hash.replace(/^#/, ""));
+  if (!params.has("error") && !params.has("error_code")) return "";
+  return params.get("error") === "access_denied" ? AUTH_MESSAGES.googleCancelled : AUTH_MESSAGES.googleFailed;
+}
 
 type AuthErrorLike = { code?: string; status?: number; name?: string; message?: string } | null | undefined;
 
