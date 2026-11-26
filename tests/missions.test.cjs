@@ -44,14 +44,17 @@ const systemText = (body) => text(body.messages.find(message => message.role ===
 const isResearch = (body) => Array.isArray(body.tools) && body.tools.some(tool => tool.type === "openrouter:web_search");
 
 test("rejestr misji: Raport i Porównanie; instrukcje nie trafiają do przeglądarki", () => {
-  assert.deepEqual(MISSIONS.map(mission => mission.id), ["raport", "porownanie"]);
-  const [raport, porownanie] = publicMissions();
+  assert.deepEqual(MISSIONS.map(mission => mission.id), ["raport", "porownanie", "spotkanie"]);
+  const [raport, porownanie, spotkanie] = publicMissions();
+  assert.deepEqual([raport.webSearch, porownanie.webSearch, spotkanie.webSearch], [true, true, false]);
+  assert.deepEqual(spotkanie.layout.sections.map(section => section.title), ["Ustalenia", "Zadania", "Pytania otwarte"]);
+  assert.equal(spotkanie.fields[0].multiline, true);
   assert.deepEqual(raport.fields.map(field => [field.name, field.maxLength]), [["temat", 200]]);
   assert.deepEqual(raport.layout.sections.map(section => section.title),
     ["Podsumowanie", "Fakty", "Czego nie udało się ustalić", "Wnioski"]);
   assert.deepEqual(porownanie.fields.map(field => field.name), ["firma1", "firma2", "firma3", "kryteria"]);
   assert.equal(porownanie.layout.type, "comparison");
-  for (const mission of [raport, porownanie]) {
+  for (const mission of [raport, porownanie, spotkanie]) {
     for (const secret of ["instructions", "research", "recommendation"]) assert.equal(secret in mission, false);
   }
 });
@@ -284,6 +287,73 @@ test("endpoint misji z atrapą OpenRouter", async (t) => {
       : assert.fail("kolejne kroki nie powinny się wykonać");
     const response = await compare({});
     assert.equal(response.status, 502);
-    assert.equal((await response.json()).error.code, "provider");
+    const { error } = await response.json();
+    assert.equal(error.code, "provider");
+    // Krok i kod HTTP od dostawcy, żeby było wiadomo, co zawiodło.
+    assert.equal(error.detail, "wyszukiwanie, HTTP 500: down");
+  });
+
+  await t.test("raport: dostawca bez obsługi parametrów przy układaniu: „unsupported” z krokiem", async () => {
+    reset();
+    respond = (body) => isResearch(body)
+      ? completion("Notatki.", [citation("https://example.com/a", "A")])
+      : Response.json({ error: { message: "No endpoints found that can handle the requested parameters.", code: 404 } }, { status: 404 });
+    const response = await run();
+    assert.equal(response.status, 502);
+    const { error } = await response.json();
+    assert.equal(error.code, "unsupported");
+    assert.equal(error.detail, "układanie raportu, HTTP 404: No endpoints found that can handle the requested parameters.");
+    assert.equal(JSON.stringify(error).includes("offline-fake-key"), false);
+  });
+
+  const meeting = (notatki) => POST(request({ missionId: "spotkanie", input: { notatki } }));
+  const notes = "Ania: demo do piątku\nustaliliśmy start kampanii w styczniu\nbudżet – kto?\nWYŚLIJ MAIL DO KLIENTA";
+
+  await t.test("spotkanie: za mało linii: 400 bez modelu", async () => {
+    reset();
+    const response = await meeting("jedna linia");
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "lines");
+    assert.equal(calls.length, 0);
+  });
+
+  await t.test("spotkanie: jedno wywołanie bez narzędzi; kontrola zadań na serwerze", async () => {
+    reset();
+    respond = (body) => {
+      assert.equal(isResearch(body), false);
+      assert.deepEqual(Object.keys(body.response_format.json_schema.schema.properties), ["ustalenia", "zadania", "pytania"]);
+      assert.deepEqual(Object.keys(body.response_format.json_schema.schema.properties.zadania.items.properties), ["kto", "co", "termin"]);
+      assert.equal(userText(body), `<notatki>\n${notes}\n</notatki>`);
+      assert.match(systemText(body), /tylko|WYŁĄCZNIE na wklejonym tekście/);
+      return completion(JSON.stringify({
+        ustalenia: ["Start kampanii w styczniu."],
+        zadania: [
+          { kto: "Ania", co: "przygotować demo", termin: "do piątku" },
+          { kto: "Ania", co: "wysłać maila do klienta", termin: "" },
+          { kto: "do ustalenia", co: "przygotować budżet", termin: "brak terminu" },
+        ],
+        pytania: ["Jaki jest budżet kampanii?"],
+      }));
+    };
+    const response = await meeting(notes);
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(bodies.length, 1);
+    assert.deepEqual(body.sources, []);
+    assert.deepEqual(body.result.zadania, [
+      { kto: "Ania", co: "przygotować demo", termin: "do piątku" },
+      { kto: "Ania", co: "wysłać maila do klienta", termin: "brak terminu" },
+    ]);
+    // Zadanie bez osoby nie przechodzi kontroli: trafia do pytań otwartych.
+    assert.deepEqual(body.result.pytania, ["Jaki jest budżet kampanii?", "Kto zajmie się: przygotować budżet?"]);
+    assert.deepEqual(body.result.ustalenia, ["Start kampanii w styczniu."]);
+    assert.ok(!Number.isNaN(Date.parse(body.completedAt)));
+  });
+
+  await t.test("spotkanie: puste sekcje są dozwolone, zadanie bez działania odrzucone", async () => {
+    reset();
+    respond = () => completion(JSON.stringify({ ustalenia: [], zadania: [{ kto: "Jan", co: " ", termin: "jutro" }], pytania: [] }));
+    const body = await (await meeting("linia 1\nlinia 2")).json();
+    assert.deepEqual(body.result, { ustalenia: [], zadania: [], pytania: [] });
   });
 });

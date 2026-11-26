@@ -8,21 +8,44 @@ import { webSearchTool } from "./model";
 import { AGENT_STEP_LIMIT } from "./tool-catalog";
 import type { Mission } from "./missions";
 import {
-  hasValidCitation, MAX_CELL_CHARS, MISSION_TIME_LIMIT_MS, missionModelSchema, missionResultSchema, missionSourceSchema, NO_DATA,
+  hasValidCitation, MAX_CELL_CHARS, NO_DEADLINE, type MissionTask, MISSION_TIME_LIMIT_MS, missionModelSchema, missionResultSchema, missionSourceSchema, NO_DATA,
   parseCriteria, comparisonResultSchema, sourceLabel, type ComparisonCell, type ComparisonResult, type MissionErrorCode, type MissionSection, type MissionSource,
 } from "./mission-schema";
 
 export type MissionOutcome =
   | { ok: true; result: unknown; sources: MissionSource[] }
-  | { ok: false; code: MissionErrorCode; status: number };
+  // detail: który krok i jaki kod HTTP od dostawcy, np. „wyszukiwanie, HTTP 429” (bez treści i sekretów).
+  | { ok: false; code: MissionErrorCode; status: number; detail?: string };
 
 type OpenRouter = ReturnType<typeof createOpenRouter>;
-type Context = { openrouter: OpenRouter; model: string; signal: AbortSignal; timeout: AbortSignal };
+// step: nazwa bieżącego kroku misji, do opisu błędu.
+type Context = { openrouter: OpenRouter; model: string; signal: AbortSignal; timeout: AbortSignal; step: string };
 class MissionFailure extends Error {
-  constructor(readonly code: MissionErrorCode, readonly status: number) { super(code); }
+  constructor(readonly code: MissionErrorCode, readonly status: number, readonly detail?: string) { super(code); }
 }
 
-const fail = (code: MissionErrorCode, status: number): MissionOutcome => ({ ok: false, code, status });
+const fail = (code: MissionErrorCode, status: number, detail?: string): MissionOutcome =>
+  ({ ok: false, code, status, ...(detail ? { detail } : {}) });
+
+// Krótki opis błędu: krok, kod HTTP i komunikat OpenRoutera (np. „No endpoints found…”), bez treści
+// zapytania, odpowiedzi modelu i sekretów. Trafia do logu serwera i do komunikatu na stronie.
+function describeError(step: string, error: unknown) {
+  if (APICallError.isInstance(error)) {
+    let message = "";
+    try { message = String(JSON.parse(error.responseBody ?? "{}")?.error?.message ?? ""); } catch {}
+    message = message.replace(/\s+/g, " ").replace(/sk-[\w-]+/g, "[klucz]").slice(0, 160);
+    return `${step}, HTTP ${error.statusCode ?? "brak"}${message ? `: ${message}` : ""}`;
+  }
+  return `${step}, ${error instanceof Error ? error.name : "nieznany błąd"}`;
+}
+
+// Odpowiedź 400/404/422 o braku obsługi structured output albo parametrów → „unsupported”.
+function unsupportedParameters(error: unknown) {
+  if (!APICallError.isInstance(error)) return false;
+  const detail = `${error.message} ${error.responseBody ?? ""}`;
+  return [400, 404, 422].includes(error.statusCode ?? 0) &&
+    /structured.?output|response_format|json_schema|require_parameters|no endpoints found/i.test(detail);
+}
 
 function today() {
   const now = warsawTime();
@@ -71,17 +94,19 @@ async function structured<T>({ openrouter, model, signal }: Context, schema: z.Z
 
 // --- Krok 1 obu układów: wyszukiwanie w internecie i notatki ze źródłami ---
 
-type Research = { subject: string; notes: string; sources: MissionSource[]; failed: boolean };
+type Research = { subject: string; notes: string; sources: MissionSource[]; failed: boolean; detail?: string };
 
 async function research(mission: Mission, subject: string, input: Record<string, string>, ctx: Context,
   { group, limit }: { group?: string; limit: number }): Promise<Research> {
+  if (!mission.research) throw new MissionFailure("unknown", 404);
+  const steps = mission.research;
   try {
     // Jak w czacie: wyszukiwanie w internecie i zwykły tekst, bez wymagania structured output.
     const result = await generateText({
       model: ctx.openrouter(ctx.model, { parallelToolCalls: false }),
       tools: { web_search: webSearchTool(ctx.openrouter, { maxResults: 5 }) },
-      instructions: `${mission.research.instructions}\n\nBieżąca data: ${today()}.`,
-      messages: [{ role: "user", content: mission.research.prompt(subject, input) }],
+      instructions: `${steps.instructions}\n\nBieżąca data: ${today()}.`,
+      messages: [{ role: "user", content: steps.prompt(subject, input) }],
       // Ten sam limit kroków co w czacie; do tego minuta na całą misję.
       stopWhen: isStepCount(AGENT_STEP_LIMIT),
       abortSignal: ctx.signal,
@@ -90,17 +115,58 @@ async function research(mission: Mission, subject: string, input: Record<string,
     return { subject, notes: result.text.trim().slice(0, 6_000), sources: searchSources(result.steps, group, limit), failed: false };
   } catch (error) {
     if (ctx.signal.aborted) throw error;
-    if (APICallError.isInstance(error)) console.error(`[misje] wyszukiwanie: HTTP ${error.statusCode ?? "brak"}`);
-    return { subject, notes: "", sources: [], failed: true };
+    const detail = describeError("wyszukiwanie", error);
+    console.error(`[misje] ${detail}`);
+    return { subject, notes: "", sources: [], failed: true, detail };
   }
 }
 
 // --- Układ "sections" (Raport): krok 1 wyszukiwanie, krok 2 ułożenie w pola z numerami źródeł ---
 
+// Zadania bez osoby nie spełniają kontroli: trafiają jako pytanie do sekcji questionsTo.
+// Brak terminu (puste, „-”, „nie podano”…) zapisujemy jednolicie jako „brak terminu”.
+const NO_PERSON = new Set(["", "?", "-", "–", "—", "brak", "nie wiadomo", "nieznany", "nieznana", "nieustalone", "do ustalenia",
+  "ktoś", "nie przypisano", "brak osoby", "n/a", "none", "unknown"]);
+const NO_TERM = new Set(["", "?", "-", "–", "—", "brak", "nie podano", "nieustalony", "nieustalone", "do ustalenia", "n/a", "none", NO_DEADLINE]);
+const plain = (text: string) => text.trim().toLocaleLowerCase("pl-PL").replace(/[.!]+$/, "");
+
+function checkTasks(sections: MissionSection[], result: Record<string, unknown>) {
+  const fixed: Record<string, unknown> = { ...result };
+  for (const section of sections) {
+    if (section.kind !== "tasks" || !Array.isArray(result[section.key])) continue;
+    const tasks: MissionTask[] = [];
+    const questions: string[] = [];
+    for (const task of result[section.key] as MissionTask[]) {
+      const co = task.co.trim();
+      if (!co) continue;
+      if (NO_PERSON.has(plain(task.kto))) { questions.push(`Kto zajmie się: ${co.replace(/[.?]+$/, "")}?`); continue; }
+      tasks.push({ kto: task.kto.trim(), co, termin: NO_TERM.has(plain(task.termin)) ? NO_DEADLINE : task.termin.trim() });
+    }
+    fixed[section.key] = tasks;
+    const target = fixed[section.questionsTo];
+    if (questions.length && Array.isArray(target)) fixed[section.questionsTo] = [...target, ...questions];
+  }
+  return fixed;
+}
+
+// Misja bez narzędzi: jedno wywołanie modelu na wklejonym tekście, wynik w ustalonych polach.
+async function runWithoutTools(mission: Mission, sections: MissionSection[], input: Record<string, string>, ctx: Context): Promise<MissionOutcome> {
+  if (!mission.prompt) return fail("unknown", 404);
+  ctx.step = "układanie wyniku";
+  const output = await structured(ctx, missionModelSchema(sections), `misja_${mission.id}`,
+    `${mission.instructions}\n\nBieżąca data: ${today()}.`, mission.prompt(input));
+  const parsed = missionModelSchema(sections).safeParse(output);
+  if (!parsed.success) return fail("invalid_output", 502, ctx.step);
+  const validated = missionResultSchema(sections, 0).safeParse(checkTasks(sections, parsed.data));
+  if (!validated.success) return fail("invalid_output", 502, ctx.step);
+  return { ok: true, result: validated.data, sources: [] };
+}
+
 async function runSections(mission: Mission, sections: MissionSection[], input: Record<string, string>, ctx: Context): Promise<MissionOutcome> {
+  if (!mission.research) return runWithoutTools(mission, sections, input, ctx);
   const subject = input[mission.fields[0].name];
   const found = await research(mission, subject, input, ctx, { limit: 12 });
-  if (found.failed) return fail("provider", 502);
+  if (found.failed) return fail("provider", 502, found.detail);
   const sources = found.sources;
 
   // Wyszukiwanie nic nie zwróciło: raport mówi to wprost, bez wywoływania modelu (nie ma czego cytować).
@@ -108,7 +174,7 @@ async function runSections(mission: Mission, sections: MissionSection[], input: 
     const result = Object.fromEntries(sections.map(section => [section.key, section.kind === "text"
       ? `Wyszukiwanie w internecie nie zwróciło żadnych stron na temat „${subject}”, więc nie ma podstaw do raportu. ` +
         "Nie podajemy faktów bez źródeł. Spróbuj inaczej sformułować temat."
-      : section.needsSources ? []
+      : section.kind === "tasks" || (section.kind === "list" && section.needsSources) ? []
         : ["Wyszukiwanie nie zwróciło żadnych stron, dlatego nie udało się ustalić żadnych faktów na ten temat."]]));
     const validated = missionResultSchema(sections, 0).safeParse(result);
     return validated.success ? { ok: true, result: validated.data, sources } : fail("invalid_output", 502);
@@ -116,6 +182,7 @@ async function runSections(mission: Mission, sections: MissionSection[], input: 
 
   // Krok 2: notatki i ponumerowana lista źródeł → ustalone pola (bez narzędzi).
   const numbered = sources.map((source, i) => `[${i + 1}] ${source.title} (${new URL(source.url).hostname})`).join("\n");
+  ctx.step = "układanie raportu";
   const output = await structured(ctx, missionModelSchema(sections), `misja_${mission.id}`,
     `${mission.instructions}\n\nBieżąca data: ${today()}.`,
     `Temat: ${subject}\n\n<notatki>\n${found.notes || "Brak notatek."}\n</notatki>\n\n<zrodla>\n${numbered}\n</zrodla>`);
@@ -125,7 +192,7 @@ async function runSections(mission: Mission, sections: MissionSection[], input: 
   const repaired = Object.fromEntries(sections.map(section => {
     const value = parsed.data[section.key];
     return [section.key, section.kind === "list" && section.cite && Array.isArray(value)
-      ? value.filter(point => hasValidCitation(point, sources.length)) : value];
+      ? (value as string[]).filter(point => hasValidCitation(point, sources.length)) : value];
   }));
   // Pełne sprawdzenie sekcji na serwerze (kolejność wynika z definicji misji).
   const validated = missionResultSchema(sections, sources.length).safeParse(repaired);
@@ -217,6 +284,7 @@ async function recommend(mission: Mission, companies: string[], criteria: string
       cells[j][i].value === NO_DATA ? NO_DATA : `${cells[j][i].value} (${sourceLabel(cells[j][i])})`])),
   }));
   const schema = recommendationSchema(companies);
+  ctx.step = "rekomendacja";
   const parsed = schema.safeParse(await structured(ctx, schema, `misja_${mission.id}_rekomendacja`,
     mission.recommendation!.instructions, `<tabela>\n${JSON.stringify(table, null, 1)}\n</tabela>`));
   if (!parsed.success) throw new MissionFailure("invalid_output", 502);
@@ -237,19 +305,20 @@ async function recommend(mission: Mission, companies: string[], criteria: string
 }
 
 async function runComparison(mission: Mission, input: Record<string, string>, ctx: Context): Promise<MissionOutcome> {
-  if (mission.layout.type !== "comparison" || !mission.recommendation) return fail("unknown", 404);
+  if (mission.layout.type !== "comparison" || !mission.recommendation || !mission.research) return fail("unknown", 404);
   const companies = mission.layout.companyFields.map(name => input[name].trim());
   const criteria = parseCriteria(input[mission.layout.criteriaField]);
 
   // Krok 1: zebranie informacji ze źródłami, równolegle dla każdej firmy.
   const findings = await Promise.all(companies.map(company => research(mission, company, input, ctx, { group: company, limit: 8 })));
-  if (findings.every(item => item.failed)) return fail("provider", 502);
+  if (findings.every(item => item.failed)) return fail("provider", 502, findings[0].detail);
 
   // Krok 2: ułożenie notatek w ustalone pola (bez narzędzi), sprawdzonych na serwerze.
   const { schema, companyKey, criterionKey } = comparisonSchema(companies, criteria);
   const notes = findings.map((item, i) => `<notatki firma="${companyKey(i)}" nazwa="${item.subject}">\n` +
     (item.sources.length ? item.notes || NO_DATA : "Wyszukiwanie nie zwróciło żadnych stron. Wszystkie kryteria: brak danych.") +
     `\nŹródła: ${item.sources.map(source => source.title).join("; ") || "brak"}\n</notatki>`).join("\n\n");
+  ctx.step = "układanie tabeli";
   const output = await structured(ctx, schema, `misja_${mission.id}`, mission.instructions,
     `Firmy: ${companies.map((company, i) => `${companyKey(i)} = „${company}”`).join(", ")}\n` +
     `Kryteria: ${criteria.map((criterion, j) => `${criterionKey(j)} = „${criterion}”`).join(", ")}\n\n${notes}`);
@@ -298,7 +367,7 @@ export async function runMission(mission: Mission, input: Record<string, string>
 
   // Minuta na całą misję (wszystkie kroki razem).
   const timeout = AbortSignal.timeout(MISSION_TIME_LIMIT_MS);
-  const ctx: Context = { openrouter: createOpenRouter({ apiKey }), model, signal: AbortSignal.any([signal, timeout]), timeout };
+  const ctx: Context = { openrouter: createOpenRouter({ apiKey }), model, signal: AbortSignal.any([signal, timeout]), timeout, step: "wyszukiwanie" };
   try {
     await requireStructuredOutput(model, ctx.signal);
   } catch (error) {
@@ -314,10 +383,10 @@ export async function runMission(mission: Mission, input: Record<string, string>
   } catch (error) {
     if (timeout.aborted) return fail("timeout", 504);
     if (signal.aborted) return fail("interrupted", 400);
-    if (error instanceof MissionFailure) return fail(error.code, error.status);
-    if (NoObjectGeneratedError.isInstance(error)) return fail("invalid_output", 502);
-    // W logu tylko kod HTTP: bez treści zapytania, odpowiedzi dostawcy i sekretów.
-    if (APICallError.isInstance(error)) console.error(`[misje] błąd dostawcy AI: HTTP ${error.statusCode ?? "brak"}`);
-    return fail("provider", 502);
+    if (error instanceof MissionFailure) return fail(error.code, error.status, error.detail);
+    if (NoObjectGeneratedError.isInstance(error)) return fail("invalid_output", 502, ctx.step);
+    const detail = describeError(ctx.step, error);
+    console.error(`[misje] ${detail}`);
+    return fail(unsupportedParameters(error) ? "unsupported" : "provider", 502, detail);
   }
 }

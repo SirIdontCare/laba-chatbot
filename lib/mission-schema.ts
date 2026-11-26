@@ -10,14 +10,24 @@ export type MissionField = {
   maxLength: number;
   placeholder?: string;
   hint?: string;
+  // multiline: duże pole tekstowe; minLines: najmniej niepustych linii (np. notatki ze spotkania).
+  multiline?: boolean;
+  minLines?: number;
 };
 
 // Sekcja wyniku: "text" = akapit, "list" = punkty (min–max). Źródła dokłada serwer.
 // cite: każdy punkt kończy się numerem źródła, np. „… [2]”, z listy ponumerowanych źródeł.
 // needsSources: gdy wyszukiwanie nic nie zwróciło, sekcja może (a przy cite musi) być pusta.
+// "tasks" = zadania (kto, co, do kiedy); zadanie bez osoby serwer przenosi do sekcji questionsTo
+// jako pytanie, a brak terminu zapisuje jako „brak terminu”.
+// emptyText: co pokazać, gdy lista jest pusta (bez tego pusta sekcja jest ukryta).
 export type MissionSection =
   | { key: string; title: string; kind: "text"; hint: string }
-  | { key: string; title: string; kind: "list"; min: number; max: number; hint: string; cite?: boolean; needsSources?: boolean };
+  | { key: string; title: string; kind: "list"; min: number; max: number; hint: string; cite?: boolean; needsSources?: boolean; emptyText?: string }
+  | { key: string; title: string; kind: "tasks"; min: number; max: number; hint: string; questionsTo: string; emptyText?: string };
+
+export const NO_DEADLINE = "brak terminu";
+export type MissionTask = { kto: string; co: string; termin: string };
 
 // Układ wyniku misji:
 // - "sections": sekcje tekstu i punktów w podanej kolejności (np. Raport),
@@ -32,6 +42,8 @@ export type PublicMission = {
   description: string;
   fields: MissionField[];
   layout: MissionLayout;
+  // false = agent nie używa żadnych narzędzi (pracuje tylko na wklejonym tekście), bez listy źródeł.
+  webSearch: boolean;
 };
 
 export const MISSION_TIME_LIMIT_MS = 60_000;
@@ -44,6 +56,14 @@ export const NO_DATA = "brak danych";
 export function missionInputSchema(fields: MissionField[]) {
   return z.strictObject(Object.fromEntries(fields.map(field =>
     [field.name, z.string().trim().min(1).max(field.maxLength)])));
+}
+
+// Sprawdzenie pól ponad limit znaków, np. najmniejsza liczba linii notatek.
+export function fieldInputError(fields: MissionField[], input: Record<string, string>): MissionErrorCode | null {
+  for (const field of fields) {
+    if (field.minLines && (input[field.name] ?? "").split("\n").filter(line => line.trim()).length < field.minLines) return "lines";
+  }
+  return null;
 }
 
 // Kryteria po przecinku: bez pustych i bez powtórzeń (wielkość liter bez znaczenia).
@@ -72,9 +92,17 @@ export function layoutInputError(layout: MissionLayout, input: Record<string, st
 // --- Układ "sections" ---
 
 // Schemat dla modelu (JSON Schema w trybie strict): tylko proste typy, bez ograniczeń długości.
+const taskSchema = z.strictObject({
+  kto: z.string().describe("Osoba odpowiedzialna, dokładnie jak w notatkach."),
+  co: z.string().describe("Co ma zrobić: konkretne działanie, zaczynające się od czasownika."),
+  termin: z.string().describe(`Termin dokładnie jak w notatkach (np. „do piątku”, „15.12”). Gdy go nie ma: „${NO_DEADLINE}”.`),
+});
+
 export function missionModelSchema(sections: MissionSection[]) {
   return z.strictObject(Object.fromEntries(sections.map(section => [section.key,
-    section.kind === "text" ? z.string().describe(section.hint) : z.array(z.string()).describe(section.hint)])));
+    section.kind === "text" ? z.string().describe(section.hint)
+      : section.kind === "tasks" ? z.array(taskSchema).describe(section.hint)
+        : z.array(z.string()).describe(section.hint)])));
 }
 
 // Numery źródeł na końcu punktu, np. „… [1][3]” albo „… [2, 4]” → [1, 3] / [2, 4]. Brak = [].
@@ -101,13 +129,24 @@ export function missionResultSchema(sections: MissionSection[], sourceCount: num
         }
         continue;
       }
+      if (section.kind === "tasks") {
+        // Kontrola zadań: każde ma osobę, działanie i termin albo „brak terminu”.
+        const tasks = value as unknown as MissionTask[];
+        if (!Array.isArray(tasks) || tasks.length < section.min || tasks.length > section.max ||
+          tasks.some(task => !task.kto?.trim() || !task.co?.trim() || !task.termin?.trim() ||
+            task.kto.length > 100 || task.co.length > MAX_POINT_CHARS || task.termin.length > 100)) {
+          context.addIssue({ code: "custom", path: [section.key], message: `Każde zadanie w sekcji „${section.title}” musi mieć osobę, działanie i termin albo „${NO_DEADLINE}”.` });
+        }
+        continue;
+      }
       const noSources = sourceCount === 0 && section.needsSources;
       const min = noSources ? 0 : section.min;
       const max = noSources && section.cite ? 0 : section.max;
-      if (!Array.isArray(value) || value.length < min || value.length > max ||
-        value.some(point => !point.trim() || point.length > MAX_POINT_CHARS)) {
+      const points = value as unknown as string[];
+      if (!Array.isArray(points) || points.length < min || points.length > max ||
+        points.some(point => typeof point !== "string" || !point.trim() || point.length > MAX_POINT_CHARS)) {
         context.addIssue({ code: "custom", path: [section.key], message: `Sekcja „${section.title}” musi mieć ${min}–${max} punktów.` });
-      } else if (section.cite && value.some(point => !hasValidCitation(point, sourceCount))) {
+      } else if (section.cite && points.some(point => !hasValidCitation(point, sourceCount))) {
         context.addIssue({ code: "custom", path: [section.key], message: `Każdy punkt sekcji „${section.title}” musi kończyć się numerem źródła z listy.` });
       }
     }
@@ -187,6 +226,7 @@ export function formatCompletedAt(iso: string) {
 export const MISSION_ERRORS = {
   unknown: "Nie ma takiej misji. Odśwież stronę i wybierz misję z listy.",
   input: "Uzupełnij pola formularza (sprawdź limit znaków przy każdym polu).",
+  lines: "Wklej notatki ze spotkania: co najmniej kilka linii tekstu.",
   criteria: "Podaj od 2 do 5 różnych kryteriów oddzielonych przecinkami, np. cena, opinie klientów, dostępność.",
   duplicates: "Podaj trzy różne firmy lub produkty.",
   configuration: "Brak konfiguracji modelu na serwerze (OPENROUTER_API_KEY i OPENROUTER_MODEL). Poproś administratora o uzupełnienie.",

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { AccountSummary } from "../../lib/account";
 import {
-  citedNumbers, formatCompletedAt, isMissionErrorCode, layoutInputError, MISSION_ERRORS, MISSION_TIME_LIMIT_MS, missionResponseSchema, NO_DATA,
+  citedNumbers, fieldInputError, formatCompletedAt, isMissionErrorCode, NO_DEADLINE, type MissionTask, layoutInputError, MISSION_ERRORS, MISSION_TIME_LIMIT_MS, missionResponseSchema, NO_DATA,
   parseCriteria, parseMissionResult, sourceLabel, type ComparisonResult, type MissionSection, type MissionSource, type PublicMission,
 } from "../../lib/mission-schema";
 import ThemeToggle from "../theme-toggle";
@@ -31,22 +31,44 @@ function CitedPoint({ text }: { text: string }) {
   return <>{body}{" "}{numbers.map(number => <a key={number} className="citation" href={`#zrodlo-${number}`}>[{number}]</a>)}</>;
 }
 
-function SectionsReport({ sections, result, sources }: { sections: MissionSection[]; result: Record<string, string | string[]>; sources: MissionSource[] }) {
+// Zadania: kto, co, do kiedy. „brak terminu” jest wyróżnione, żeby było widać, co trzeba dopytać.
+function TaskTable({ tasks }: { tasks: MissionTask[] }) {
+  return <div className="comparison-scroll" role="region" aria-label="Zadania" tabIndex={0}>
+    <table className="comparison-table task-table">
+      <thead><tr><th scope="col">Kto</th><th scope="col">Co</th><th scope="col">Do kiedy</th></tr></thead>
+      <tbody>{tasks.map((task, index) => <tr key={index}>
+        <th scope="row">{task.kto}</th><td>{task.co}</td>
+        <td className={task.termin === NO_DEADLINE ? "no-data" : undefined}>{task.termin}</td>
+      </tr>)}</tbody>
+    </table>
+  </div>;
+}
+
+function SectionsReport({ sections, result, sources, webSearch }: {
+  sections: MissionSection[]; result: Record<string, unknown>; sources: MissionSource[]; webSearch: boolean;
+}) {
   return <>
     {sections.map(section => {
       const value = result[section.key];
-      if (typeof value === "string") return <div key={section.key}><h4>{section.title}</h4><p>{value}</p></div>;
-      // Sekcja wymagająca źródeł jest pusta tylko wtedy, gdy wyszukiwanie nic nie zwróciło.
-      if (!value.length) return null;
+      if (section.kind === "text") return <div key={section.key}><h4>{section.title}</h4><p>{value as string}</p></div>;
+      const items = value as unknown[];
+      // Pusta lista: tekst z definicji misji albo (bez niego) sekcja ukryta, np. fakty bez źródeł.
+      if (!items.length) {
+        return section.emptyText ? <div key={section.key}><h4>{section.title}</h4><p className="status">{section.emptyText}</p></div> : null;
+      }
       return <div key={section.key}>
         <h4>{section.title}</h4>
-        <ul>{value.map((point, index) => <li key={index}>
-          {section.kind === "list" && section.cite ? <CitedPoint text={point} /> : point}
-        </li>)}</ul>
+        {section.kind === "tasks"
+          ? <TaskTable tasks={items as MissionTask[]} />
+          : <ul>{(items as string[]).map((point, index) => <li key={index}>
+            {section.cite ? <CitedPoint text={point} /> : point}
+          </li>)}</ul>}
       </div>;
     })}
-    <h4>Źródła</h4>
-    <SourceList numbered sources={sources} empty="Wyszukiwanie w internecie nie zwróciło żadnych stron, więc raport nie zawiera faktów." />
+    {webSearch
+      ? <><h4>Źródła</h4>
+        <SourceList numbered sources={sources} empty="Wyszukiwanie w internecie nie zwróciło żadnych stron, więc raport nie zawiera faktów." /></>
+      : <p className="status">Agent pracował tylko na wklejonym tekście, bez internetu i innych narzędzi.</p>}
   </>;
 }
 
@@ -80,7 +102,7 @@ function MissionReport({ mission, report }: { mission: PublicMission; report: Re
   return <section className="analysis-result mission-report" aria-labelledby="report-heading">
     <h3 id="report-heading">{mission.name}</h3>
     {mission.layout.type === "sections"
-      ? <SectionsReport sections={mission.layout.sections} result={report.result as Record<string, string | string[]>} sources={report.sources} />
+      ? <SectionsReport sections={mission.layout.sections} result={report.result as Record<string, unknown>} sources={report.sources} webSearch={mission.webSearch} />
       : <ComparisonReport result={report.result as ComparisonResult} sources={report.sources} />}
     <p className="mission-meta">Misja wykonana: <time dateTime={report.completedAt}>{formatCompletedAt(report.completedAt)}</time></p>
     <p className="status">Wynik jest tylko tekstem na ekranie. Nic nie zostało zapisane ani wysłane.</p>
@@ -113,7 +135,7 @@ export default function MissionsClient({ account, missions }: { account: Account
     if (!mission || busy || leaving || activeRequest.current) return;
     const input = Object.fromEntries(mission.fields.map(field => [field.name, (values[field.name] ?? "").trim()]));
     if (mission.fields.some(field => !input[field.name])) { setError(MISSION_ERRORS.input); return; }
-    const layoutError = layoutInputError(mission.layout, input);
+    const layoutError = fieldInputError(mission.fields, input) ?? layoutInputError(mission.layout, input);
     if (layoutError) { setError(MISSION_ERRORS[layoutError]); return; }
     const controller = new AbortController();
     activeRequest.current = controller;
@@ -136,7 +158,11 @@ export default function MissionsClient({ account, missions }: { account: Account
       const body = await response.json().catch(() => null);
       if (!response.ok) {
         const code: unknown = body?.error?.code;
-        setError(isMissionErrorCode(code) ? MISSION_ERRORS[code] : MISSION_ERRORS.provider);
+        const detail: unknown = body?.error?.detail;
+        // Bez JSON-a odpowiedź nie pochodzi z misji (np. limit czasu serwera na hostingu).
+        const message = isMissionErrorCode(code) ? MISSION_ERRORS[code]
+          : response.status === 504 ? MISSION_ERRORS.timeout : MISSION_ERRORS.provider;
+        setError(`${message} (Szczegóły: ${typeof detail === "string" && detail ? detail : `HTTP ${response.status}`}.)`);
         return;
       }
       // Ponowne sprawdzenie sekcji i źródeł w przeglądarce, zanim cokolwiek pokażemy.
@@ -184,12 +210,17 @@ export default function MissionsClient({ account, missions }: { account: Account
           const value = values[field.name] ?? "";
           return <div key={field.name} className="mission-field">
             <label htmlFor={`mission-${field.name}`}>{field.label}</label>
-            <input id={`mission-${field.name}`} value={value} maxLength={field.maxLength} placeholder={field.placeholder}
+            {field.multiline
+              ? <textarea id={`mission-${field.name}`} value={value} maxLength={field.maxLength} placeholder={field.placeholder}
+                rows={12} required disabled={busy || leaving}
+                onChange={event => { setValues(current => ({ ...current, [field.name]: event.target.value })); setError(""); }} />
+              : <input id={`mission-${field.name}`} value={value} maxLength={field.maxLength} placeholder={field.placeholder}
               required disabled={busy || leaving}
-              onChange={event => { setValues(current => ({ ...current, [field.name]: event.target.value })); setError(""); }} />
+              onChange={event => { setValues(current => ({ ...current, [field.name]: event.target.value })); setError(""); }} />}
             <p className="status">{field.hint ? `${field.hint} ` : ""}{value.length}/{field.maxLength} znaków
               {mission.layout.type === "comparison" && field.name === mission.layout.criteriaField
-                ? ` · kryteriów: ${parseCriteria(value).length}` : ""}</p>
+                ? ` · kryteriów: ${parseCriteria(value).length}` : ""}
+              {field.multiline ? ` · linii: ${value.split("\n").filter(line => line.trim()).length}` : ""}</p>
           </div>;
         })}
         <div className="analysis-actions">
