@@ -175,3 +175,4 @@ html[data-signed-out] body { visibility: hidden; }
 .user-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .user-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .triage-cards { list-style: none; padding: 0; margin: 0; display: grid; gap: 16px; } .triage-cards .analysis-result { margin-top: 0; } .triage-cards .analysis-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
+.triage-summary { display: flex; flex-wrap: wrap; gap: 8px 20px; margin: 20px 0 16px; padding: 14px 18px; border: 1px solid var(--line); border-radius: 12px; background: light-dark(#ffffff, #19271f); } .triage-summary p { margin: 0; } .todo-marker { padding: 1px 4px; border-radius: 4px; background: light-dark(#fff1c2, #5a4a12); color: inherit; font-weight: 600; } .kb-source-line { margin: 8px 0 0; font-size: 13px; color: var(--muted); }

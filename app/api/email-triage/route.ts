@@ -31,7 +31,7 @@ export async function POST(request: Request) {
   }
 
   // Podział na maile odbywa się na serwerze, niezależnie od tego, co policzyła przeglądarka.
-  const outcome = await triageEmails(splitEmails(input.data.text), request.signal);
+  const outcome = await triageEmails(splitEmails(input.data.text), user, request.signal);
   if (!outcome.ok) return triageFailure(outcome.code, outcome.status);
   // Wynik to tylko tekst do przeczytania: nic nie jest wysyłane ani zapisywane.
   return Response.json({ cards: outcome.cards }, { headers: { "Cache-Control": "no-store" } });

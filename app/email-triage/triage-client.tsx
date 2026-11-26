@@ -1,11 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type { AccountSummary } from "../../lib/account";
 import {
-  isTriageErrorCode, splitEmails, TRIAGE_ERRORS, TRIAGE_MAX_EMAILS, TRIAGE_MAX_INPUT_CHARS,
-  triageResponseSchema, type TriageCard,
+  isTriageErrorCode, splitEmails, TODO_MARKER, TRIAGE_ERRORS, TRIAGE_MAX_EMAILS, TRIAGE_MAX_INPUT_CHARS,
+  TRIAGE_PRIORITIES, TRIAGE_PRIORITY_RANK, triageResponseSchema, type TriageCard,
 } from "../../lib/email-triage-schema";
 import ThemeToggle from "../theme-toggle";
 import UserMenu from "../user-menu";
@@ -36,6 +36,35 @@ function CopyDraftButton({ text }: { text: string }) {
   </div>;
 }
 
+// Szkic z wyróżnionymi znacznikami [DO UZUPEŁNIENIA: …]; kopiowany jest zwykły tekst ze znacznikami.
+function Draft({ text }: { text: string }) {
+  const parts: ReactNode[] = [];
+  let last = 0;
+  for (const match of text.matchAll(TODO_MARKER)) {
+    parts.push(text.slice(last, match.index));
+    parts.push(<mark key={match.index} className="todo-marker">{match[0]}</mark>);
+    last = match.index + match[0].length;
+  }
+  parts.push(text.slice(last));
+  return <p className="analysis-draft">{parts}</p>;
+}
+
+// Od najwyższego priorytetu; przy tym samym priorytecie kolejność maili (sort jest stabilny).
+// Karty z błędem nie mają priorytetu, więc są na końcu.
+const rank = (card: TriageCard) => card.ok ? TRIAGE_PRIORITY_RANK[card.result.priorytet] : TRIAGE_PRIORITIES.length;
+
+function Summary({ cards }: { cards: TriageCard[] }) {
+  const count = (priority: (typeof TRIAGE_PRIORITIES)[number]) =>
+    cards.filter(card => card.ok && card.result.priorytet === priority).length;
+  const failed = cards.filter(card => !card.ok).length;
+  return <section className="triage-summary" aria-label="Podsumowanie priorytetów">
+    <p><strong>Wysoki:</strong> {count("wysoki")}</p>
+    <p><strong>Średni:</strong> {count("średni")}</p>
+    <p><strong>Niski:</strong> {count("niski")}</p>
+    {failed > 0 && <p><strong>Nieudane:</strong> {failed}</p>}
+  </section>;
+}
+
 function ResultCard({ card, number }: { card: TriageCard; number: number }) {
   if (!card.ok) {
     return <li className="analysis-result">
@@ -54,7 +83,9 @@ function ResultCard({ card, number }: { card: TriageCard; number: number }) {
       <dt>Uzasadnienie priorytetu</dt><dd>{result.uzasadnienie}</dd>
     </dl>
     <h4>Szkic odpowiedzi</h4>
-    <p className="analysis-draft">{result.szkic}</p>
+    <Draft text={result.szkic} />
+    {card.sources.length > 0 && <p className="kb-source-line">📎 Źródło: {card.sources.join(", ")}</p>}
+    {card.knowledgeNote && <p className="status">{card.knowledgeNote}</p>}
     <CopyDraftButton text={result.szkic} />
   </li>;
 }
@@ -140,8 +171,11 @@ export default function TriageClient({ account }: { account: AccountSummary }) {
       <div aria-live="polite" aria-busy={busy}>
         {busy && <p className="status" role="status">Agent sortuje…</p>}
         {error && <p className="error" role="alert">{error}</p>}
+        {cards && <Summary cards={cards} />}
         {cards && <ol className="triage-cards">
-          {cards.map((card, index) => <ResultCard key={index} card={card} number={index + 1} />)}
+          {cards.map((card, index) => ({ card, number: index + 1 }))
+            .sort((a, b) => rank(a.card) - rank(b.card))
+            .map(({ card, number }) => <ResultCard key={number} card={card} number={number} />)}
         </ol>}
         {cards && <p className="status">To są szkice. Nic nie zostało wysłane.</p>}
       </div>
