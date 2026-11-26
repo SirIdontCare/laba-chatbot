@@ -62,16 +62,16 @@ const comparisonFields: MissionField[] = [
 // --- Notatki ze spotkania ---
 
 const meetingSections: MissionSection[] = [
-  { key: "ustalenia", title: "Ustalenia", kind: "list", min: 0, max: 20, emptyText: "W notatkach nie ma ustaleń.",
-    hint: "Decyzje i ustalenia ze spotkania, każde jednym zdaniem." },
-  { key: "zadania", title: "Zadania", kind: "tasks", min: 0, max: 30, questionsTo: "pytania", emptyText: "W notatkach nie ma zadań.",
-    hint: "Zadania: kto, co, do kiedy. Tylko zadania z osobą podaną w notatkach." },
-  { key: "pytania", title: "Pytania otwarte", kind: "list", min: 0, max: 20, emptyText: "W notatkach nie ma pytań otwartych.",
-    hint: "Sprawy nierozstrzygnięte, pytania bez odpowiedzi, zadania bez osoby odpowiedzialnej." },
+  { key: "ustalenia", title: "Ustalenia", kind: "list", min: 0, max: 20, emptyText: `${NO_DATA}: w notatkach nie ma ustaleń.`,
+    hint: `Decyzje i ustalenia ze spotkania, każde jednym zdaniem. Brakującą część informacji oznacz „${NO_DATA}”.` },
+  { key: "zadania", title: "Zadania", kind: "tasks", min: 0, max: 30, emptyText: `${NO_DATA}: w notatkach nie ma zadań.`,
+    hint: `Zadania: kto, co, do kiedy. Brak osoby: „${NO_DATA}”, brak terminu: „${NO_DEADLINE}”.` },
+  { key: "pytania", title: "Pytania otwarte", kind: "list", min: 0, max: 20, emptyText: `${NO_DATA}: w notatkach nie ma pytań otwartych.`,
+    hint: "Sprawy nierozstrzygnięte i pytania bez odpowiedzi." },
 ];
 
 const meetingFields: MissionField[] = [
-  { name: "notatki", label: "Notatki ze spotkania", maxLength: 10_000, multiline: true, minLines: 2,
+  { name: "notatki", label: "Notatki ze spotkania", maxLength: 10_000, multiline: true, minLines: 2, minChars: 30,
     placeholder: "np.\nAnia: wersja demo gotowa do piątku\nustaliliśmy, że start kampanii w styczniu\nkto robi budżet? – do ustalenia",
     hint: "Wklej od kilku do kilkudziesięciu linii." },
 ];
@@ -178,24 +178,40 @@ ${COMMON_RULES}`,
     name: "Notatki ze spotkania",
     description: "Agent zamienia wklejone notatki ze spotkania w ustalenia, zadania (kto, co, do kiedy) i pytania otwarte, pracując tylko na Twoim tekście.",
     fields: meetingFields,
-    layout: { type: "sections", sections: meetingSections },
+    // inputCheck: przy pustych, zbyt ogólnych albo nie na temat notatkach agent nie zgaduje,
+    // tylko pisze, czego brakuje (strona prosi o uzupełnienie).
+    layout: { type: "sections", sections: meetingSections, inputCheck: true },
+    about: {
+      goal: "Zamienić luźne notatki ze spotkania w listę ustaleń i zadań.",
+      tools: "Żadnych: agent pracuje tylko na wklejonym tekście, bez internetu i bazy wiedzy, i niczego nie wysyła.",
+      output: "Trzy sekcje: Ustalenia, Zadania (kto, co, do kiedy) i Pytania otwarte. Brakujące informacje są oznaczone „brak danych”.",
+      check: "Czy każde zadanie ma osobę i termin albo dopisek „brak terminu”, czy osoby i terminy zgadzają się z notatkami oraz co zrobić z miejscami „brak danych”.",
+    },
     // Bez research: żadnych narzędzi ani internetu, jedno wywołanie modelu na wklejonym tekście.
     prompt: input => `<notatki>\n${input.notatki}\n</notatki>`,
     instructions: `Zamieniasz luźne notatki ze spotkania (w znacznikach <notatki>) na listę ustaleń i zadań.
 Pracujesz WYŁĄCZNIE na wklejonym tekście. Nie masz internetu ani innych narzędzi i niczego nie dodajesz
 z własnej wiedzy.
 
+Najpierw oceń dane wejściowe (pole dane_wejsciowe):
+- wystarczajace = false, gdy tekst jest pusty, zbyt krótki lub ogólny, żeby wyciągnąć z niego
+  ustalenia albo zadania, albo gdy to nie są notatki ze spotkania (np. przepis, artykuł, losowy tekst).
+  W czego_brakuje napisz konkretnie, czego brakuje albo dlaczego tekst nie pasuje, i o co poprosić,
+  np. „Brakuje informacji, kto co ma zrobić. Dopisz osoby i zadania ze spotkania.”.
+  Wtedy wszystkie sekcje zostaw puste. Nie zgaduj i nie wymyślaj treści spotkania.
+- wystarczajace = true, gdy to notatki ze spotkania, z których da się coś wyciągnąć; czego_brakuje pusty.
+
+Sekcje:
 - ustalenia: decyzje i ustalenia, które zapadły na spotkaniu, każde jednym zdaniem.
 - zadania: każde zadanie ma trzy pola:
   - kto: osoba odpowiedzialna, dokładnie tak, jak jest zapisana w notatkach (imię, inicjały, dział).
-    Nie przypisuj osoby, której nie ma w notatkach przy tym zadaniu.
+    Nie przypisuj osoby, której nie ma w notatkach przy tym zadaniu. Gdy jej nie ma: „${NO_DATA}”.
   - co: konkretne działanie, zaczynające się od czasownika (np. „przygotować budżet kampanii”).
   - termin: dokładnie tak, jak jest w notatkach (np. „do piątku”, „15.12”, „przed startem”).
     Gdy terminu nie ma, wpisz dokładnie „${NO_DEADLINE}”. Nie wymyślaj ani nie przeliczaj dat.
-  Zadanie bez osoby odpowiedzialnej nie trafia do zadań: zapisz je w pytaniach otwartych jako pytanie
-  „Kto zajmie się: …?”.
-- pytania: sprawy nierozstrzygnięte, pytania bez odpowiedzi i zadania bez osoby odpowiedzialnej.
-Gdy w notatkach nie ma czegoś do danej sekcji, zostaw ją pustą.
+- pytania: sprawy nierozstrzygnięte i pytania bez odpowiedzi.
+Gdy jakiejś informacji nie ma w notatkach, zaznacz to słowami „${NO_DATA}” (np. „Start kampanii
+w styczniu, budżet: ${NO_DATA}.”). Gdy w notatkach nie ma niczego do danej sekcji, zostaw ją pustą.
 
 Zasady:
 - Piszesz po polsku, jasno i krótko.
@@ -212,6 +228,6 @@ export function findMission(id: unknown): Mission | undefined {
 
 // To, co trafia do przeglądarki: bez instrukcji dla modelu.
 export function publicMissions(): PublicMission[] {
-  return MISSIONS.map(({ id, name, description, fields, layout, research }) =>
-    ({ id, name, description, fields, layout, webSearch: Boolean(research) }));
+  return MISSIONS.map(({ id, name, description, fields, layout, research, about }) =>
+    ({ id, name, description, fields, layout, webSearch: Boolean(research), ...(about ? { about } : {}) }));
 }

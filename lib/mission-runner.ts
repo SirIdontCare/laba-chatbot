@@ -123,41 +123,47 @@ async function research(mission: Mission, subject: string, input: Record<string,
 
 // --- Układ "sections" (Raport): krok 1 wyszukiwanie, krok 2 ułożenie w pola z numerami źródeł ---
 
-// Zadania bez osoby nie spełniają kontroli: trafiają jako pytanie do sekcji questionsTo.
-// Brak terminu (puste, „-”, „nie podano”…) zapisujemy jednolicie jako „brak terminu”.
+// Kontrola zadań: brak osoby zapisujemy jednolicie jako „brak danych” (strona to wyróżnia),
+// brak terminu (puste, „-”, „nie podano”…) jako „brak terminu”. Zadanie bez działania odpada.
 const NO_PERSON = new Set(["", "?", "-", "–", "—", "brak", "nie wiadomo", "nieznany", "nieznana", "nieustalone", "do ustalenia",
-  "ktoś", "nie przypisano", "brak osoby", "n/a", "none", "unknown"]);
-const NO_TERM = new Set(["", "?", "-", "–", "—", "brak", "nie podano", "nieustalony", "nieustalone", "do ustalenia", "n/a", "none", NO_DEADLINE]);
+  "ktoś", "nie przypisano", "brak osoby", "n/a", "none", "unknown", NO_DATA]);
+const NO_TERM = new Set(["", "?", "-", "–", "—", "brak", "nie podano", "nieustalony", "nieustalone", "do ustalenia", "n/a", "none",
+  NO_DATA, NO_DEADLINE]);
 const plain = (text: string) => text.trim().toLocaleLowerCase("pl-PL").replace(/[.!]+$/, "");
 
 function checkTasks(sections: MissionSection[], result: Record<string, unknown>) {
   const fixed: Record<string, unknown> = { ...result };
   for (const section of sections) {
     if (section.kind !== "tasks" || !Array.isArray(result[section.key])) continue;
-    const tasks: MissionTask[] = [];
-    const questions: string[] = [];
-    for (const task of result[section.key] as MissionTask[]) {
-      const co = task.co.trim();
-      if (!co) continue;
-      if (NO_PERSON.has(plain(task.kto))) { questions.push(`Kto zajmie się: ${co.replace(/[.?]+$/, "")}?`); continue; }
-      tasks.push({ kto: task.kto.trim(), co, termin: NO_TERM.has(plain(task.termin)) ? NO_DEADLINE : task.termin.trim() });
-    }
-    fixed[section.key] = tasks;
-    const target = fixed[section.questionsTo];
-    if (questions.length && Array.isArray(target)) fixed[section.questionsTo] = [...target, ...questions];
+    fixed[section.key] = (result[section.key] as MissionTask[]).filter(task => task.co.trim()).map(task => ({
+      kto: NO_PERSON.has(plain(task.kto)) ? NO_DATA : task.kto.trim(),
+      co: task.co.trim(),
+      termin: NO_TERM.has(plain(task.termin)) ? NO_DEADLINE : task.termin.trim(),
+    }));
   }
   return fixed;
 }
 
 // Misja bez narzędzi: jedno wywołanie modelu na wklejonym tekście, wynik w ustalonych polach.
+// inputCheck: gdy model oceni dane jako niewystarczające, misja nie zgaduje wyniku, tylko zwraca,
+// czego brakuje (needs_input), a strona prosi o uzupełnienie.
 async function runWithoutTools(mission: Mission, sections: MissionSection[], input: Record<string, string>, ctx: Context): Promise<MissionOutcome> {
   if (!mission.prompt) return fail("unknown", 404);
+  const inputCheck = mission.layout.type === "sections" && Boolean(mission.layout.inputCheck);
+  const schema = missionModelSchema(sections, { inputCheck });
   ctx.step = "układanie wyniku";
-  const output = await structured(ctx, missionModelSchema(sections), `misja_${mission.id}`,
+  const output = await structured(ctx, schema, `misja_${mission.id}`,
     `${mission.instructions}\n\nBieżąca data: ${today()}.`, mission.prompt(input));
-  const parsed = missionModelSchema(sections).safeParse(output);
+  const parsed = schema.safeParse(output);
   if (!parsed.success) return fail("invalid_output", 502, ctx.step);
-  const validated = missionResultSchema(sections, 0).safeParse(checkTasks(sections, parsed.data));
+  const { dane_wejsciowe: check, ...fields } = parsed.data as Record<string, unknown> & {
+    dane_wejsciowe?: { wystarczajace: boolean; czego_brakuje: string };
+  };
+  if (check && !check.wystarczajace) {
+    const missing = check.czego_brakuje.replace(/\s+/g, " ").trim().slice(0, 300);
+    return fail("needs_input", 422, missing || "Notatki nie zawierają ustaleń ani zadań ze spotkania.");
+  }
+  const validated = missionResultSchema(sections, 0).safeParse(checkTasks(sections, fields));
   if (!validated.success) return fail("invalid_output", 502, ctx.step);
   return { ok: true, result: validated.data, sources: [] };
 }

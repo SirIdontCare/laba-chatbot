@@ -13,27 +13,30 @@ export type MissionField = {
   // multiline: duże pole tekstowe; minLines: najmniej niepustych linii (np. notatki ze spotkania).
   multiline?: boolean;
   minLines?: number;
+  // minChars: najmniej znaków bez spacji (za krótki tekst to brak danych do pracy).
+  minChars?: number;
 };
 
 // Sekcja wyniku: "text" = akapit, "list" = punkty (min–max). Źródła dokłada serwer.
 // cite: każdy punkt kończy się numerem źródła, np. „… [2]”, z listy ponumerowanych źródeł.
 // needsSources: gdy wyszukiwanie nic nie zwróciło, sekcja może (a przy cite musi) być pusta.
-// "tasks" = zadania (kto, co, do kiedy); zadanie bez osoby serwer przenosi do sekcji questionsTo
-// jako pytanie, a brak terminu zapisuje jako „brak terminu”.
+// "tasks" = zadania (kto, co, do kiedy); brak osoby serwer zapisuje jako „brak danych”,
+// a brak terminu jako „brak terminu”.
 // emptyText: co pokazać, gdy lista jest pusta (bez tego pusta sekcja jest ukryta).
 export type MissionSection =
   | { key: string; title: string; kind: "text"; hint: string }
   | { key: string; title: string; kind: "list"; min: number; max: number; hint: string; cite?: boolean; needsSources?: boolean; emptyText?: string }
-  | { key: string; title: string; kind: "tasks"; min: number; max: number; hint: string; questionsTo: string; emptyText?: string };
+  | { key: string; title: string; kind: "tasks"; min: number; max: number; hint: string; emptyText?: string };
 
 export const NO_DEADLINE = "brak terminu";
 export type MissionTask = { kto: string; co: string; termin: string };
 
 // Układ wyniku misji:
-// - "sections": sekcje tekstu i punktów w podanej kolejności (np. Raport),
+// - "sections": sekcje tekstu i punktów w podanej kolejności (np. Raport); inputCheck: model najpierw
+//   ocenia, czy dane wejściowe wystarczą, i przy braku nie zgaduje, tylko pisze, czego brakuje,
 // - "comparison": tabela firmy × kryteria, rekomendacja i źródła (np. Porównanie trzech firm).
 export type MissionLayout =
-  | { type: "sections"; sections: MissionSection[] }
+  | { type: "sections"; sections: MissionSection[]; inputCheck?: boolean }
   | { type: "comparison"; companyFields: string[]; criteriaField: string; minCriteria: number; maxCriteria: number };
 
 export type PublicMission = {
@@ -44,6 +47,8 @@ export type PublicMission = {
   layout: MissionLayout;
   // false = agent nie używa żadnych narzędzi (pracuje tylko na wklejonym tekście), bez listy źródeł.
   webSearch: boolean;
+  // Rozwijany opis pod nazwą misji: cel, narzędzia, format wyniku i co sprawdzić przed użyciem.
+  about?: { goal: string; tools: string; output: string; check: string };
 };
 
 export const MISSION_TIME_LIMIT_MS = 60_000;
@@ -61,7 +66,9 @@ export function missionInputSchema(fields: MissionField[]) {
 // Sprawdzenie pól ponad limit znaków, np. najmniejsza liczba linii notatek.
 export function fieldInputError(fields: MissionField[], input: Record<string, string>): MissionErrorCode | null {
   for (const field of fields) {
-    if (field.minLines && (input[field.name] ?? "").split("\n").filter(line => line.trim()).length < field.minLines) return "lines";
+    const value = input[field.name] ?? "";
+    if (field.minLines && value.split("\n").filter(line => line.trim()).length < field.minLines) return "lines";
+    if (field.minChars && value.replace(/\s/g, "").length < field.minChars) return "lines";
   }
   return null;
 }
@@ -98,11 +105,20 @@ const taskSchema = z.strictObject({
   termin: z.string().describe(`Termin dokładnie jak w notatkach (np. „do piątku”, „15.12”). Gdy go nie ma: „${NO_DEADLINE}”.`),
 });
 
-export function missionModelSchema(sections: MissionSection[]) {
-  return z.strictObject(Object.fromEntries(sections.map(section => [section.key,
+// Ocena danych wejściowych (pierwsze pole, żeby model ocenił je przed resztą).
+export const inputCheckSchema = z.strictObject({
+  wystarczajace: z.boolean().describe("true, gdy tekst to materiał na temat misji i wystarcza do przygotowania wyniku."),
+  czego_brakuje: z.string().describe("Gdy false: konkretnie, czego brakuje lub dlaczego tekst nie pasuje. Gdy true: pusty tekst."),
+});
+
+export function missionModelSchema(sections: MissionSection[], { inputCheck = false }: { inputCheck?: boolean } = {}) {
+  return z.strictObject(Object.fromEntries([
+    ...(inputCheck ? [["dane_wejsciowe", inputCheckSchema] as const] : []),
+    ...sections.map(section => [section.key,
     section.kind === "text" ? z.string().describe(section.hint)
       : section.kind === "tasks" ? z.array(taskSchema).describe(section.hint)
-        : z.array(z.string()).describe(section.hint)])));
+        : z.array(z.string()).describe(section.hint)] as const),
+  ]));
 }
 
 // Numery źródeł na końcu punktu, np. „… [1][3]” albo „… [2, 4]” → [1, 3] / [2, 4]. Brak = [].
@@ -226,7 +242,8 @@ export function formatCompletedAt(iso: string) {
 export const MISSION_ERRORS = {
   unknown: "Nie ma takiej misji. Odśwież stronę i wybierz misję z listy.",
   input: "Uzupełnij pola formularza (sprawdź limit znaków przy każdym polu).",
-  lines: "Wklej notatki ze spotkania: co najmniej kilka linii tekstu.",
+  lines: "Dane są puste albo za krótkie. Wklej notatki ze spotkania: co najmniej 2 linie, np. kto co ustalił i co jest do zrobienia.",
+  needs_input: "Agent nie ma z czego przygotować wyniku i nie będzie zgadywać. Uzupełnij dane i uruchom misję ponownie.",
   criteria: "Podaj od 2 do 5 różnych kryteriów oddzielonych przecinkami, np. cena, opinie klientów, dostępność.",
   duplicates: "Podaj trzy różne firmy lub produkty.",
   configuration: "Brak konfiguracji modelu na serwerze (OPENROUTER_API_KEY i OPENROUTER_MODEL). Poproś administratora o uzupełnienie.",

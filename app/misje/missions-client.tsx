@@ -33,15 +33,44 @@ function CitedPoint({ text }: { text: string }) {
 
 // Zadania: kto, co, do kiedy. „brak terminu” jest wyróżnione, żeby było widać, co trzeba dopytać.
 function TaskTable({ tasks }: { tasks: MissionTask[] }) {
-  return <div className="comparison-scroll" role="region" aria-label="Zadania" tabIndex={0}>
-    <table className="comparison-table task-table">
-      <thead><tr><th scope="col">Kto</th><th scope="col">Co</th><th scope="col">Do kiedy</th></tr></thead>
-      <tbody>{tasks.map((task, index) => <tr key={index}>
-        <th scope="row">{task.kto}</th><td>{task.co}</td>
-        <td className={task.termin === NO_DEADLINE ? "no-data" : undefined}>{task.termin}</td>
-      </tr>)}</tbody>
-    </table>
-  </div>;
+  const withPerson = tasks.filter(task => task.kto !== NO_DATA).length;
+  const noDeadline = tasks.filter(task => task.termin === NO_DEADLINE).length;
+  return <>
+    {/* Kontrola z kontraktu misji: osoba i termin albo „brak terminu” przy każdym zadaniu. */}
+    <p className={withPerson === tasks.length ? "status" : "status task-warning"}>
+      Kontrola: {withPerson} z {tasks.length} zadań ma osobę{withPerson < tasks.length ? ` (${tasks.length - withPerson} do uzupełnienia: „${NO_DATA}”)` : ""}
+      {noDeadline ? `, ${noDeadline} bez terminu („${NO_DEADLINE}”)` : ", każde ma termin"}.
+    </p>
+    <div className="comparison-scroll" role="region" aria-label="Zadania" tabIndex={0}>
+      <table className="comparison-table task-table">
+        <thead><tr><th scope="col">Kto</th><th scope="col">Co</th><th scope="col">Do kiedy</th></tr></thead>
+        <tbody>{tasks.map((task, index) => <tr key={index}>
+          <th scope="row" className={task.kto === NO_DATA ? "no-data" : undefined}>{task.kto}</th><td><MarkNoData text={task.co} /></td>
+          <td className={task.termin === NO_DEADLINE ? "no-data" : undefined}>{task.termin}</td>
+        </tr>)}</tbody>
+      </table>
+    </div>
+  </>;
+}
+
+// Wyróżnia „brak danych” w tekście, żeby od razu było widać, czego brakuje.
+function MarkNoData({ text }: { text: string }) {
+  const parts = text.split(new RegExp(`(${NO_DATA})`, "giu"));
+  return <>{parts.map((part, index) => part.toLocaleLowerCase("pl-PL") === NO_DATA
+    ? <mark key={index} className="no-data-mark">{part}</mark> : part)}</>;
+}
+
+// Rozwijany opis misji: cel, narzędzia, format wyniku i co sprawdzić przed użyciem.
+function MissionAbout({ about }: { about: NonNullable<PublicMission["about"]> }) {
+  return <details className="mission-about">
+    <summary>Opis misji: cel, narzędzia, wynik i co sprawdzić</summary>
+    <dl>
+      <dt>Cel</dt><dd>{about.goal}</dd>
+      <dt>Narzędzia</dt><dd>{about.tools}</dd>
+      <dt>Format wyniku</dt><dd>{about.output}</dd>
+      <dt>Sprawdź przed użyciem wyniku</dt><dd>{about.check}</dd>
+    </dl>
+  </details>;
 }
 
 function SectionsReport({ sections, result, sources, webSearch }: {
@@ -54,14 +83,14 @@ function SectionsReport({ sections, result, sources, webSearch }: {
       const items = value as unknown[];
       // Pusta lista: tekst z definicji misji albo (bez niego) sekcja ukryta, np. fakty bez źródeł.
       if (!items.length) {
-        return section.emptyText ? <div key={section.key}><h4>{section.title}</h4><p className="status">{section.emptyText}</p></div> : null;
+        return section.emptyText ? <div key={section.key}><h4>{section.title}</h4><p className="status"><MarkNoData text={section.emptyText} /></p></div> : null;
       }
       return <div key={section.key}>
         <h4>{section.title}</h4>
         {section.kind === "tasks"
           ? <TaskTable tasks={items as MissionTask[]} />
           : <ul>{(items as string[]).map((point, index) => <li key={index}>
-            {section.cite ? <CitedPoint text={point} /> : point}
+            {section.cite ? <CitedPoint text={point} /> : <MarkNoData text={point} />}
           </li>)}</ul>}
       </div>;
     })}
@@ -162,7 +191,10 @@ export default function MissionsClient({ account, missions }: { account: Account
         // Bez JSON-a odpowiedź nie pochodzi z misji (np. limit czasu serwera na hostingu).
         const message = isMissionErrorCode(code) ? MISSION_ERRORS[code]
           : response.status === 504 ? MISSION_ERRORS.timeout : MISSION_ERRORS.provider;
-        setError(`${message} (Szczegóły: ${typeof detail === "string" && detail ? detail : `HTTP ${response.status}`}.)`);
+        const text = typeof detail === "string" && detail ? detail : "";
+        // Za mało danych: agent nie zgadywał, tylko napisał, czego brakuje.
+        setError(code === "needs_input" ? `${message} Czego brakuje: ${text || MISSION_ERRORS.lines}`
+          : `${message} (Szczegóły: ${text || `HTTP ${response.status}`}.)`);
         return;
       }
       // Ponowne sprawdzenie sekcji i źródeł w przeglądarce, zanim cokolwiek pokażemy.
@@ -205,6 +237,7 @@ export default function MissionsClient({ account, missions }: { account: Account
 
     {mission && <section aria-labelledby="mission-form-heading">
       <h2 id="mission-form-heading">Misja: {mission.name}</h2>
+      {mission.about && <MissionAbout about={mission.about} />}
       <form onSubmit={run}>
         {mission.fields.map(field => {
           const value = values[field.name] ?? "";
