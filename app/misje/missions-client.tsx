@@ -5,12 +5,13 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import type { AccountSummary } from "../../lib/account";
 import {
   citedNumbers, fieldInputError, formatCompletedAt, isMissionErrorCode, NO_DEADLINE, type MissionTask, layoutInputError, MISSION_ERRORS, MISSION_TIME_LIMIT_MS, missionResponseSchema, NO_DATA,
-  parseCriteria, parseMissionResult, sourceLabel, type ComparisonResult, type MissionSection, type MissionSource, type PublicMission,
+  parseCriteria, parseMissionResult, sourceLabel, type ComparisonResult, type MissionRunSummary, type MissionSection, type MissionSource, type PublicMission, type SavedMissionRun,
 } from "../../lib/mission-schema";
 import ThemeToggle from "../theme-toggle";
 import UserMenu from "../user-menu";
 
-type Report = { result: unknown; sources: MissionSource[]; completedAt: string };
+// saved: wynik zapisany w historii; saveError: zapis się nie udał.
+type Report = { result: unknown; sources: MissionSource[]; completedAt: string; saved?: boolean; saveError?: string };
 
 // numbered: źródła ponumerowane [1], [2]… (Raport), z kotwicami dla odnośników w faktach.
 function SourceList({ sources, empty, numbered = false }: { sources: MissionSource[]; empty: string; numbered?: boolean }) {
@@ -134,14 +135,40 @@ function MissionReport({ mission, report }: { mission: PublicMission; report: Re
       ? <SectionsReport sections={mission.layout.sections} result={report.result as Record<string, unknown>} sources={report.sources} webSearch={mission.webSearch} />
       : <ComparisonReport result={report.result as ComparisonResult} sources={report.sources} />}
     <p className="mission-meta">Misja wykonana: <time dateTime={report.completedAt}>{formatCompletedAt(report.completedAt)}</time></p>
-    <p className="status">Wynik jest tylko tekstem na ekranie. Nic nie zostało zapisane ani wysłane.</p>
+    {report.saveError && <p className="error" role="alert">{report.saveError}</p>}
+    <p className="status">{report.saved
+      ? "Wynik jest zapisany w Twojej historii misji (widzisz go tylko Ty). Nic nie zostało wysłane."
+      : "Wynik jest tylko tekstem na ekranie. Nic nie zostało zapisane ani wysłane."}</p>
   </section>;
 }
 
-export default function MissionsClient({ account, missions }: { account: AccountSummary; missions: PublicMission[] }) {
-  const [selectedId, setSelectedId] = useState(missions[0]?.id ?? "");
+// Pięć ostatnich wykonań misji: kliknięcie otwiera zapisany wynik (/misje?run=…).
+function RecentRuns({ runs, openedId }: { runs: MissionRunSummary[] | null; openedId?: string }) {
+  return <section className="mission-runs" aria-labelledby="runs-heading">
+    <h3 id="runs-heading">Ostatnie wykonania</h3>
+    {runs === null
+      ? <p className="error">Nie udało się wczytać historii misji. Odśwież stronę.</p>
+      : runs.length === 0
+        ? <p className="status">Brak zapisanych wykonań. Wynik pojawi się tu po pierwszym uruchomieniu misji.</p>
+        : <ul className="history-list">{runs.map(run => <li key={run.id}>
+          <Link href={`/misje?run=${encodeURIComponent(run.id)}`} aria-current={run.id === openedId ? "page" : undefined}>
+            <strong>{formatCompletedAt(run.createdAt)}</strong>
+            <span>{run.id === openedId ? "Otwarty wynik" : "Otwórz zapisany wynik"}</span>
+          </Link>
+        </li>)}</ul>}
+  </section>;
+}
+
+export default function MissionsClient({ account, missions, runs: initialRuns, openedRun, runLoadError }: {
+  account: AccountSummary; missions: PublicMission[]; runs: Record<string, MissionRunSummary[] | null>;
+  openedRun: SavedMissionRun | null; runLoadError: boolean;
+}) {
+  const [selectedId, setSelectedId] = useState(openedRun?.mission ?? missions[0]?.id ?? "");
   const [values, setValues] = useState<Record<string, string>>({});
-  const [report, setReport] = useState<Report | null>(null);
+  // Otwarty zapisany wynik (z listy ostatnich wykonań) pokazujemy jak zwykły wynik misji.
+  const [report, setReport] = useState<Report | null>(openedRun ? { ...openedRun.report, saved: true } : null);
+  const [viewing, setViewing] = useState<SavedMissionRun | null>(openedRun);
+  const [runs, setRuns] = useState(initialRuns);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [leaving, setLeaving] = useState(false);
@@ -156,6 +183,7 @@ export default function MissionsClient({ account, missions }: { account: Account
     setSelectedId(id);
     setValues({});
     setReport(null);
+    setViewing(null);
     setError("");
   }
 
@@ -170,6 +198,7 @@ export default function MissionsClient({ account, missions }: { account: Account
     activeRequest.current = controller;
     setBusy(true);
     setReport(null);
+    setViewing(null);
     setError("");
     try {
       // Serwer przerywa misję po minucie; przeglądarka czeka chwilę dłużej na jego odpowiedź.
@@ -201,7 +230,10 @@ export default function MissionsClient({ account, missions }: { account: Account
       const shape = missionResponseSchema.safeParse(body);
       const checked = shape.success ? parseMissionResult(mission.layout, shape.data.result, shape.data.sources.length) : null;
       if (!shape.success || !checked?.success) { setError(MISSION_ERRORS.invalid_output); return; }
-      setReport({ result: checked.data, sources: shape.data.sources, completedAt: shape.data.completedAt });
+      const { run: savedRun, saveError } = shape.data;
+      setReport({ result: checked.data, sources: shape.data.sources, completedAt: shape.data.completedAt, saved: Boolean(savedRun), saveError });
+      // Nowe wykonanie na górze listy (najwyżej 5).
+      if (savedRun) setRuns(current => ({ ...current, [mission.id]: [savedRun, ...(current[mission.id] ?? [])].slice(0, 5) }));
     } catch (failure) {
       if (activeRequest.current !== controller) return;
       const timedOut = failure instanceof DOMException && failure.name === "TimeoutError";
@@ -265,8 +297,15 @@ export default function MissionsClient({ account, missions }: { account: Account
       <div aria-live="polite" aria-busy={busy}>
         {busy && <p className="status" role="status">Agent pracuje… To może potrwać do minuty.</p>}
         {error && <p className="error" role="alert">{error}</p>}
+        {runLoadError && !report && <p className="error" role="alert">Nie udało się wczytać zapisanego wyniku. Odśwież stronę.</p>}
+        {viewing && report && <div className="saved-run-banner">
+          <p>Zapisany wynik z <strong>{formatCompletedAt(viewing.createdAt)}</strong>.</p>
+          <details><summary>Dane wejściowe tego wykonania</summary><pre className="saved-run-input">{viewing.input}</pre></details>
+          <Link href="/misje">Nowe wykonanie</Link>
+        </div>}
         {report && <MissionReport mission={mission} report={report} />}
       </div>
+      {mission.saveRuns && <RecentRuns runs={runs[mission.id] ?? null} openedId={viewing?.id} />}
     </section>}
   </main>;
 }

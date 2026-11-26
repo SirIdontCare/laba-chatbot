@@ -11,9 +11,11 @@ import { NO_DATA, NO_DEADLINE, type MissionField, type MissionSection, type Publ
 //   Bez research misja nie ma żadnych narzędzi: jedno wywołanie modelu na wklejonym tekście,
 // - prompt: (tylko bez research) jak z wartości pól zbudować wiadomość do modelu,
 // - instructions: ułożenie notatek albo wklejonego tekstu w ustalone pola (bez narzędzi),
-// - recommendation: (tylko "comparison") krok 3, rekomendacja na podstawie gotowej tabeli.
-// Agent misji niczego nie wysyła i niczego nie zapisuje: wynik to tekst na ekranie.
-export type Mission = Omit<PublicMission, "webSearch"> & {
+// - recommendation: (tylko "comparison") krok 3, rekomendacja na podstawie gotowej tabeli,
+// - saveRuns: zapisywać wynik w historii osoby (tabela mission_runs, RLS) i pokazywać 5 ostatnich.
+// Agent misji niczego nie wysyła; bez saveRuns niczego też nie zapisuje: wynik to tekst na ekranie.
+export type Mission = Omit<PublicMission, "webSearch" | "saveRuns"> & {
+  saveRuns?: boolean;
   research?: { instructions: string; prompt: (subject: string, input: Record<string, string>) => string };
   prompt?: (input: Record<string, string>) => string;
   instructions: string;
@@ -181,6 +183,8 @@ ${COMMON_RULES}`,
     // inputCheck: przy pustych, zbyt ogólnych albo nie na temat notatkach agent nie zgaduje,
     // tylko pisze, czego brakuje (strona prosi o uzupełnienie).
     layout: { type: "sections", sections: meetingSections, inputCheck: true },
+    // Wyniki tej misji trafiają do historii zalogowanej osoby (mission_runs).
+    saveRuns: true,
     about: {
       goal: "Zamienić luźne notatki ze spotkania w listę ustaleń i zadań.",
       tools: "Żadnych: agent pracuje tylko na wklejonym tekście, bez internetu i bazy wiedzy, i niczego nie wysyła.",
@@ -228,6 +232,6 @@ export function findMission(id: unknown): Mission | undefined {
 
 // To, co trafia do przeglądarki: bez instrukcji dla modelu.
 export function publicMissions(): PublicMission[] {
-  return MISSIONS.map(({ id, name, description, fields, layout, research, about }) =>
-    ({ id, name, description, fields, layout, webSearch: Boolean(research), ...(about ? { about } : {}) }));
+  return MISSIONS.map(({ id, name, description, fields, layout, research, about, saveRuns }) =>
+    ({ id, name, description, fields, layout, webSearch: Boolean(research), saveRuns: Boolean(saveRuns), ...(about ? { about } : {}) }));
 }

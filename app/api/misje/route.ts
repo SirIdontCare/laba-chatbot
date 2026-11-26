@@ -4,7 +4,8 @@ import { sameOrigin } from "../../../lib/request-origin";
 import { AUTH_MESSAGES } from "../../../lib/auth-messages";
 import { findMission } from "../../../lib/missions";
 import { runMission } from "../../../lib/mission-runner";
-import { fieldInputError, layoutInputError, MISSION_ERRORS, missionInputSchema, type MissionErrorCode } from "../../../lib/mission-schema";
+import { saveMissionRun } from "../../../lib/mission-runs";
+import { fieldInputError, layoutInputError, MISSION_ERRORS, missionInputSchema, type MissionErrorCode, type MissionRunSummary } from "../../../lib/mission-schema";
 
 export const maxDuration = 120;
 
@@ -41,7 +42,19 @@ export async function POST(request: Request) {
 
   const outcome = await runMission(mission, values, request.signal);
   if (!outcome.ok) return missionFailure(outcome.code, outcome.status, outcome.detail);
-  // Wynik to tylko tekst do przeczytania: nic nie jest zapisywane w bazie ani wysyłane.
-  return Response.json({ result: outcome.result, sources: outcome.sources, completedAt: new Date().toISOString() },
-    { headers: { "Cache-Control": "no-store" } });
+  const report = { result: outcome.result, sources: outcome.sources, completedAt: new Date().toISOString() };
+  // Bez saveRuns wynik to tylko tekst na ekranie. Z saveRuns zapisujemy go w historii tej osoby
+  // klientem bazy z jej sesji (RLS), po ponownej weryfikacji sesji po długiej pracy modelu.
+  // Nieudany zapis nie ukrywa wyniku: strona pokazuje go z informacją o błędzie zapisu.
+  let saved: { run?: MissionRunSummary; saveError?: string } = {};
+  if (mission.saveRuns) {
+    try {
+      if (!await user.stillSignedIn()) throw new Error("Session expired.");
+      saved = { run: await saveMissionRun(user, mission, values, report) };
+    } catch {
+      saved = { saveError: "Nie udało się zapisać wyniku w historii. Skopiuj go, jeśli chcesz go zachować." };
+    }
+  }
+  // Agent niczego nie wysyła na zewnątrz.
+  return Response.json({ ...report, ...saved }, { headers: { "Cache-Control": "no-store" } });
 }

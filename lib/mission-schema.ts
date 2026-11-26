@@ -49,6 +49,16 @@ export type PublicMission = {
   webSearch: boolean;
   // Rozwijany opis pod nazwą misji: cel, narzędzia, format wyniku i co sprawdzić przed użyciem.
   about?: { goal: string; tools: string; output: string; check: string };
+  // true = wynik jest zapisywany w historii osoby (tabela mission_runs) i widać 5 ostatnich wykonań.
+  saveRuns: boolean;
+};
+
+// Wykonanie misji zapisane w historii (lista pod misją).
+export type MissionRunSummary = { id: string; mission: string; createdAt: string };
+// Zapisany wynik otwarty z listy: wejście i to, co było pokazane na ekranie.
+export type SavedMissionRun = MissionRunSummary & {
+  input: string;
+  report: { result: unknown; sources: MissionSource[]; completedAt: string };
 };
 
 export const MISSION_TIME_LIMIT_MS = 60_000;
@@ -225,6 +235,9 @@ export const missionResponseSchema = z.strictObject({
   sources: z.array(missionSourceSchema).max(30),
   // Kiedy serwer zakończył misję (ISO 8601); strona pokazuje to pod wynikiem.
   completedAt: z.iso.datetime(),
+  // Przy misjach z historią: zapisane wykonanie albo informacja, że zapis się nie udał.
+  run: z.strictObject({ id: z.string().min(1), mission: z.string(), createdAt: z.string() }).optional(),
+  saveError: z.string().optional(),
 });
 
 // Sprawdza wynik zgodnie z układem misji (przeglądarka robi to ponownie przed wyświetleniem).

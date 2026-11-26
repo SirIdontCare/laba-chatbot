@@ -12,11 +12,13 @@ require.extensions[".ts"] = (module, filename) => {
 };
 process.env.NODE_ENV = "development";
 
-const { installFakeAuth, TEST_AUTH_COOKIE } = require("./fake-auth.cjs");
+const { installFakeAuth, TEST_AUTH_COOKIE, USER_DB_URL, USER_DB_TOKEN, fakeAuthState, testUser } = require("./fake-auth.cjs");
 installFakeAuth();
 const { POST } = require("../app/api/misje/route.ts");
 const { MISSIONS, publicMissions } = require("../lib/missions.ts");
 const { citedNumbers, parseCriteria } = require("../lib/mission-schema.ts");
+const { listMissionRuns, loadMissionRun } = require("../lib/mission-runs.ts");
+const { findMission } = require("../lib/missions.ts");
 const origin = "http://localhost:3000";
 
 const report = {
@@ -47,6 +49,8 @@ test("rejestr misji: Raport i Porównanie; instrukcje nie trafiają do przegląd
   assert.deepEqual(MISSIONS.map(mission => mission.id), ["raport", "porownanie", "spotkanie"]);
   const [raport, porownanie, spotkanie] = publicMissions();
   assert.deepEqual([raport.webSearch, porownanie.webSearch, spotkanie.webSearch], [true, true, false]);
+  // Tylko misja „Notatki ze spotkania” zapisuje wyniki w historii.
+  assert.deepEqual([raport.saveRuns, porownanie.saveRuns, spotkanie.saveRuns], [false, false, true]);
   assert.deepEqual(spotkanie.layout.sections.map(section => section.title), ["Ustalenia", "Zadania", "Pytania otwarte"]);
   assert.equal(spotkanie.fields[0].multiline, true);
   // Rozwijany opis: cel, narzędzia, format wyniku i co sprawdzić.
@@ -70,13 +74,66 @@ test("kryteria po przecinku i numery źródeł na końcu faktu", () => {
   assert.deepEqual(citedNumbers("[1] na początku, nie na końcu"), []);
 });
 
+// Atrapa tabeli mission_runs w bazie zalogowanej osoby (PostgREST pod USER_DB_URL).
+function missionRunsDb() {
+  const db = { inserts: [], reads: [], fail: false, rows: [] };
+  db.handle = (url, init) => {
+    const headers = new Headers(init.headers);
+    // Zawsze token z sesji tej osoby, nigdy klucz secret.
+    assert.equal(headers.get("authorization"), `Bearer ${USER_DB_TOKEN}`);
+    assert.equal(url.pathname, "/rest/v1/mission_runs");
+    const one = headers.get("accept")?.includes("vnd.pgrst.object");
+    if (db.fail) return Response.json({ message: "down" }, { status: 500 });
+    if ((init.method ?? "GET") === "POST") {
+      const body = JSON.parse(init.body);
+      db.inserts.push(body);
+      assert.equal("user_id" in body, false);
+      const row = { id: 42, mission: body.mission, created_at: "2026-11-26T10:00:00+00:00" };
+      return Response.json(one ? row : [row], { status: 201 });
+    }
+    db.reads.push(url.search);
+    return Response.json(one ? db.rows[0] ?? null : db.rows);
+  };
+  return db;
+}
+
+test("historia misji: lista 5 ostatnich i odczyt zapisanego wyniku (text albo jsonb)", async (t) => {
+  const db = missionRunsDb();
+  t.mock.method(global, "fetch", async (input, init = {}) => db.handle(new URL(String(input instanceof Request ? input.url : input)), init));
+  const owner = testUser();
+  db.rows = [{ id: 7, mission: "spotkanie", created_at: "2026-11-26T09:00:00+00:00" }];
+  assert.deepEqual(await listMissionRuns(owner, "spotkanie"), [{ id: "7", mission: "spotkanie", createdAt: "2026-11-26T09:00:00+00:00" }]);
+  const query = decodeURIComponent(db.reads.at(-1));
+  assert.match(query, /user_id=eq\.11111111-1111-4111-8111-111111111111/);
+  assert.match(query, /mission=eq\.spotkanie/);
+  assert.match(query, /order=created_at\.desc/);
+  assert.match(query, /limit=5/);
+
+  const report = { result: { ustalenia: ["A"], zadania: [{ kto: "Ania", co: "zrobić demo", termin: "do piątku" }], pytania: [] },
+    sources: [], completedAt: "2026-11-26T09:00:00.000Z" };
+  for (const result of [report, JSON.stringify(report)]) {
+    db.rows = [{ id: 7, mission: "spotkanie", input: "Ania: demo do piątku", result, created_at: "2026-11-26T09:00:00+00:00" }];
+    const run = await loadMissionRun(owner, "7", findMission);
+    assert.equal(run.id, "7");
+    assert.equal(run.input, "Ania: demo do piątku");
+    assert.deepEqual(run.report.result, report.result);
+  }
+  // Brak wiersza (np. cudzy: RLS go nie pokazuje) albo wynik niezgodny z układem misji: null.
+  db.rows = [];
+  assert.equal(await loadMissionRun(owner, "8", findMission), null);
+  db.rows = [{ id: 9, mission: "spotkanie", input: "x", result: { result: { zle: 1 }, sources: [], completedAt: report.completedAt }, created_at: "2026-11-26T09:00:00+00:00" }];
+  assert.equal(await loadMissionRun(owner, "9", findMission), null);
+});
+
 test("endpoint misji z atrapą OpenRouter", async (t) => {
   let calls = [];
   let bodies = [];
   let respond;
+  let db = missionRunsDb();
   t.mock.method(global, "fetch", async (input, init = {}) => {
     const url = String(typeof input === "string" || input instanceof URL ? input : input.url);
     calls.push(url);
+    if (url.startsWith(USER_DB_URL)) return db.handle(new URL(url), init);
     if (url.endsWith("/endpoints")) {
       return Response.json({ data: { endpoints: [{ supported_parameters: ["structured_outputs", "response_format"] }] } });
     }
@@ -97,6 +154,8 @@ test("endpoint misji z atrapą OpenRouter", async (t) => {
   const reset = () => {
     calls = [];
     bodies = [];
+    db = missionRunsDb();
+    fakeAuthState.stillSignedIn = true;
     process.env.OPENROUTER_API_KEY = "offline-fake-key";
     process.env.OPENROUTER_MODEL = "test/structured-model";
   };
@@ -147,6 +206,9 @@ test("endpoint misji z atrapą OpenRouter", async (t) => {
       { url: "https://example.org/b", title: "example.org" },
     ]);
     assert.ok(!Number.isNaN(Date.parse(body.completedAt)));
+    // Raport niczego nie zapisuje w bazie.
+    assert.equal(db.inserts.length, 0);
+    assert.equal(body.run, undefined);
   });
 
   await t.test("raport: wyszukiwanie nic nie zwróciło: raport mówi to wprost, bez faktów i bez kroku 2", async () => {
@@ -336,6 +398,7 @@ test("endpoint misji z atrapą OpenRouter", async (t) => {
     const { error } = await response.json();
     assert.equal(error.code, "needs_input");
     assert.equal(error.detail, "To przepis na pierogi, a nie notatki ze spotkania. Wklej notatki z ustaleniami i zadaniami.");
+    assert.equal(db.inserts.length, 0);
   });
 
   await t.test("spotkanie: jedno wywołanie bez narzędzi; kontrola zadań na serwerze", async () => {
@@ -372,6 +435,32 @@ test("endpoint misji z atrapą OpenRouter", async (t) => {
     assert.deepEqual(body.result.ustalenia, ["Start kampanii w styczniu, budżet: brak danych."]);
     assert.equal("dane_wejsciowe" in body.result, false);
     assert.ok(!Number.isNaN(Date.parse(body.completedAt)));
+    // Zapis w historii klientem bazy tej osoby: mission, input, result (user_id wypełnia baza).
+    assert.equal(db.inserts.length, 1);
+    assert.deepEqual(Object.keys(db.inserts[0]), ["mission", "input", "result"]);
+    assert.equal(db.inserts[0].mission, "spotkanie");
+    assert.equal(db.inserts[0].input, notes);
+    assert.deepEqual(db.inserts[0].result, { result: body.result, sources: [], completedAt: body.completedAt });
+    assert.deepEqual(body.run, { id: "42", mission: "spotkanie", createdAt: "2026-11-26T10:00:00+00:00" });
+  });
+
+  await t.test("spotkanie: nieudany zapis albo wygasła sesja: wynik jest, z informacją o zapisie", async () => {
+    const valid = () => completion(JSON.stringify({ dane_wejsciowe: { wystarczajace: true, czego_brakuje: "" },
+      ustalenia: ["A."], zadania: [], pytania: [] }));
+    reset();
+    db.fail = true;
+    respond = valid;
+    let body = await (await meeting(notes)).json();
+    assert.deepEqual(body.result.ustalenia, ["A."]);
+    assert.equal(body.run, undefined);
+    assert.match(body.saveError, /Nie udało się zapisać wyniku/);
+    reset();
+    fakeAuthState.stillSignedIn = false;
+    respond = valid;
+    body = await (await meeting(notes)).json();
+    assert.equal(db.inserts.length, 0);
+    assert.match(body.saveError, /Nie udało się zapisać/);
+    fakeAuthState.stillSignedIn = true;
   });
 
   await t.test("spotkanie: puste sekcje są dozwolone, zadanie bez działania odrzucone", async () => {
