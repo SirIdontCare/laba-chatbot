@@ -12,8 +12,9 @@
     "typecheck": "tsc --noEmit",
     "test:auth": "node --conditions=react-server --test tests/auth.test.cjs",
     "test:analysis": "node --conditions=react-server --test tests/analysis.test.cjs",
+    "test:triage": "node --conditions=react-server --test tests/email-triage.test.cjs",
     "test:kb": "node --conditions=react-server --test tests/knowledge-base.test.cjs",
-    "test:agent": "node --conditions=react-server --test tests/knowledge-base.test.cjs tests/knowledge-search.test.cjs tests/auth.test.cjs tests/analysis.test.cjs tests/chat-search.test.cjs tests/images.test.cjs tests/agent-image.test.cjs tests/tools.test.cjs tests/chat-history.test.cjs tests/profile.test.cjs"
+    "test:agent": "node --conditions=react-server --test tests/knowledge-base.test.cjs tests/knowledge-search.test.cjs tests/auth.test.cjs tests/analysis.test.cjs tests/chat-search.test.cjs tests/images.test.cjs tests/agent-image.test.cjs tests/tools.test.cjs tests/chat-history.test.cjs tests/profile.test.cjs tests/email-triage.test.cjs"
   },
   "dependencies": {
     "@ai-sdk/react": "4.0.161",

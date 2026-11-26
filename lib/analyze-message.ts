@@ -18,7 +18,7 @@ const endpointsSchema = z.object({
   }),
 });
 
-async function requireStructuredOutput(model: string, signal: AbortSignal) {
+export async function requireStructuredOutput(model: string, signal: AbortSignal) {
   try {
     // Publiczne metadane: bez klucza i bez wysyłania wiadomości klienta.
     const slug = model.split("/").map(encodeURIComponent).join("/");
@@ -40,7 +40,7 @@ async function requireStructuredOutput(model: string, signal: AbortSignal) {
 }
 
 // OpenRouter 3.1 zachowuje surowe message.refusal w response.body.
-function hasRefusal(body: unknown) {
+export function hasRefusal(body: unknown) {
   const response = z.object({
     choices: z.array(z.object({
       message: z.object({ refusal: z.unknown().optional() }),

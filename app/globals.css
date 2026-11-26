@@ -174,3 +174,4 @@ html[data-signed-out] body { visibility: hidden; }
 .login .auth-divider + form { margin-top: 16px; }
 .user-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; flex-shrink: 0; }
 .user-identity { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.triage-cards { list-style: none; padding: 0; margin: 0; display: grid; gap: 16px; } .triage-cards .analysis-result { margin-top: 0; } .triage-cards .analysis-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }

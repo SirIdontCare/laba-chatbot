@@ -176,7 +176,7 @@ export default function ChatClient({ initialChat, historyError, profileName, acc
           <div><p className="eyebrow">TWOJA PRZESTRZEŃ AI</p><h1>Mój chatbot</h1>
             <p className="header-description">Rozmawiaj, odkrywaj i twórz z pomocą AI.</p></div>
         </div>
-        <div className="header-actions"><a href="/profile">Profil</a><a href="/history">Historia</a><a href="/upload">Baza wiedzy</a><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
+        <div className="header-actions"><a href="/profile">Profil</a><a href="/history">Historia</a><a href="/upload">Baza wiedzy</a><Link href="/email-triage">Triage</Link><Link href="/dashboard">Podróże ↗</Link><ThemeToggle />
         <UserMenu account={account} onBeforeLogout={beforeLogout} onLeavingChange={setLeaving} /></div>
       </header>
       <nav className="mode-switch" aria-label="Tryb pracy">
