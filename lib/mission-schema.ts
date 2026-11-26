@@ -9,6 +9,7 @@ export type MissionField = {
   label: string;
   maxLength: number;
   placeholder?: string;
+  hint?: string;
 };
 
 // Sekcja wyniku: "text" = akapit, "list" = punkty (min–max). Źródła dokłada serwer.
@@ -16,23 +17,57 @@ export type MissionSection =
   | { key: string; title: string; kind: "text"; hint: string }
   | { key: string; title: string; kind: "list"; min: number; max: number; hint: string };
 
+// Układ wyniku misji:
+// - "sections": sekcje tekstu i punktów w podanej kolejności (np. Raport),
+// - "comparison": tabela firmy × kryteria, rekomendacja i źródła (np. Porównanie trzech firm).
+export type MissionLayout =
+  | { type: "sections"; sections: MissionSection[] }
+  | { type: "comparison"; companyFields: string[]; criteriaField: string; minCriteria: number; maxCriteria: number };
+
 export type PublicMission = {
   id: string;
   name: string;
   description: string;
   fields: MissionField[];
-  sections: MissionSection[];
+  layout: MissionLayout;
 };
 
 export const MISSION_TIME_LIMIT_MS = 60_000;
 const MAX_TEXT_CHARS = 2_000;
 const MAX_POINT_CHARS = 600;
+export const MAX_CELL_CHARS = 300;
+export const NO_DATA = "brak danych";
 
 // Wartości pól formularza: każde pole wymagane, przycięte, najwyżej maxLength znaków.
 export function missionInputSchema(fields: MissionField[]) {
   return z.strictObject(Object.fromEntries(fields.map(field =>
     [field.name, z.string().trim().min(1).max(field.maxLength)])));
 }
+
+// Kryteria po przecinku: bez pustych i bez powtórzeń (wielkość liter bez znaczenia).
+export function parseCriteria(text: string): string[] {
+  const seen = new Set<string>();
+  const criteria: string[] = [];
+  for (const part of text.split(",").map(item => item.trim().replace(/\s+/g, " ")).filter(Boolean)) {
+    const key = part.toLocaleLowerCase("pl-PL");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    criteria.push(part);
+  }
+  return criteria;
+}
+
+// Dodatkowe sprawdzenie wejścia zależne od układu (serwer i przeglądarka liczą tak samo).
+export function layoutInputError(layout: MissionLayout, input: Record<string, string>): MissionErrorCode | null {
+  if (layout.type !== "comparison") return null;
+  const count = parseCriteria(input[layout.criteriaField] ?? "").length;
+  if (count < layout.minCriteria || count > layout.maxCriteria) return "criteria";
+  const names = layout.companyFields.map(name => (input[name] ?? "").trim().toLocaleLowerCase("pl-PL"));
+  if (new Set(names).size !== names.length) return "duplicates";
+  return null;
+}
+
+// --- Układ "sections" ---
 
 // Schemat dla modelu (JSON Schema w trybie strict): tylko proste typy, bez ograniczeń długości.
 export function missionModelSchema(sections: MissionSection[]) {
@@ -58,24 +93,56 @@ export function missionResultSchema(sections: MissionSection[]) {
   });
 }
 
-export const missionSourceSchema = z.strictObject({ url: z.url({ protocol: /^https?$/ }), title: z.string() });
+// --- Układ "comparison" ---
+
+// Gotowa tabela, którą serwer składa z pól sprawdzonych na serwerze (nie z tekstu modelu).
+// cells[i][j] = ocena firmy j według kryterium i.
+export const comparisonResultSchema = z.strictObject({
+  companies: z.array(z.string().min(1)).min(2).max(5),
+  criteria: z.array(z.string().min(1)).min(1).max(10),
+  cells: z.array(z.array(z.string().min(1).max(MAX_CELL_CHARS))),
+  recommendation: z.strictObject({ company: z.string().nullable(), reason: z.string().min(1).max(400) }),
+  notes: z.array(z.string()).max(10),
+}).refine(result => result.cells.length === result.criteria.length &&
+  result.cells.every(row => row.length === result.companies.length), { message: "Tabela ma złe wymiary." })
+  .refine(result => result.recommendation.company === null || result.companies.includes(result.recommendation.company),
+    { message: "Rekomendacja wskazuje firmę spoza porównania." });
+export type ComparisonResult = z.infer<typeof comparisonResultSchema>;
+
+// --- Odpowiedź endpointu ---
+
+export const missionSourceSchema = z.strictObject({
+  url: z.url({ protocol: /^https?$/ }),
+  title: z.string(),
+  // Przy porównaniu: której firmy dotyczyło wyszukiwanie.
+  group: z.string().optional(),
+});
 export type MissionSource = z.infer<typeof missionSourceSchema>;
 
 export const missionResponseSchema = z.strictObject({
-  result: z.record(z.string(), z.union([z.string(), z.array(z.string())])),
+  result: z.unknown(),
   // Wyłącznie strony zwrócone przez wyszukiwanie (url_citation od OpenRoutera), nie adresy z tekstu modelu.
-  sources: z.array(missionSourceSchema).max(20),
+  sources: z.array(missionSourceSchema).max(30),
 });
+
+// Sprawdza wynik zgodnie z układem misji (przeglądarka robi to ponownie przed wyświetleniem).
+export function parseMissionResult(layout: MissionLayout, result: unknown) {
+  return layout.type === "sections"
+    ? missionResultSchema(layout.sections).safeParse(result)
+    : comparisonResultSchema.safeParse(result);
+}
 
 export const MISSION_ERRORS = {
   unknown: "Nie ma takiej misji. Odśwież stronę i wybierz misję z listy.",
   input: "Uzupełnij pola formularza (sprawdź limit znaków przy każdym polu).",
+  criteria: "Podaj od 2 do 5 różnych kryteriów oddzielonych przecinkami, np. cena, opinie klientów, dostępność.",
+  duplicates: "Podaj trzy różne firmy lub produkty.",
   configuration: "Brak konfiguracji modelu na serwerze (OPENROUTER_API_KEY i OPENROUTER_MODEL). Poproś administratora o uzupełnienie.",
   unsupported: "Ustawiony model nie obsługuje odpowiedzi w ustalonym formacie JSON. Misja nie została uruchomiona. Poproś administratora o zmianę modelu.",
   capability: "Nie udało się sprawdzić, czy model obsługuje odpowiedzi w formacie JSON. Misja nie została uruchomiona. Spróbuj ponownie za chwilę.",
-  invalid_output: "Agent zwrócił raport niezgodny z wymaganym układem sekcji. Nic nie zostało pokazane. Spróbuj uruchomić misję ponownie.",
-  refused: "Model odmówił wykonania misji. Spróbuj inaczej sformułować temat.",
-  timeout: "Misja trwała dłużej niż minutę i została przerwana. Spróbuj ponownie albo zawęź temat.",
+  invalid_output: "Agent zwrócił wynik niezgodny z wymaganym układem. Nic nie zostało pokazane. Spróbuj uruchomić misję ponownie.",
+  refused: "Model odmówił wykonania misji. Spróbuj inaczej sformułować dane.",
+  timeout: "Misja trwała dłużej niż minutę i została przerwana. Spróbuj ponownie albo zawęź dane.",
   interrupted: "Misja została przerwana albo odpowiedź nie została ukończona. Spróbuj ponownie.",
   provider: "Błąd dostawcy AI lub wyszukiwarki. Misja się nie udała. Spróbuj ponownie za chwilę.",
 } as const;

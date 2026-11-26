@@ -16,6 +16,7 @@ const { installFakeAuth, TEST_AUTH_COOKIE } = require("./fake-auth.cjs");
 installFakeAuth();
 const { POST } = require("../app/api/misje/route.ts");
 const { MISSIONS, publicMissions } = require("../lib/missions.ts");
+const { parseCriteria } = require("../lib/mission-schema.ts");
 const origin = "http://localhost:3000";
 
 const report = {
@@ -37,13 +38,21 @@ const request = (body, cookie = TEST_AUTH_COOKIE) => new Request(origin + "/api/
   method: "POST", headers: { origin, "Content-Type": "application/json", cookie }, body: JSON.stringify(body),
 });
 
-test("rejestr misji: Raport z polem temat i sekcjami w kolejności; instrukcje nie trafiają do przeglądarki", () => {
-  assert.equal(MISSIONS.length, 1);
-  const [raport] = publicMissions();
-  assert.equal(raport.id, "raport");
+test("rejestr misji: Raport i Porównanie; instrukcje nie trafiają do przeglądarki", () => {
+  assert.deepEqual(MISSIONS.map(mission => mission.id), ["raport", "porownanie"]);
+  const [raport, porownanie] = publicMissions();
   assert.deepEqual(raport.fields.map(field => [field.name, field.maxLength]), [["temat", 200]]);
-  assert.deepEqual(raport.sections.map(section => section.title), ["Podsumowanie", "Najważniejsze informacje", "Wnioski"]);
-  assert.equal("instructions" in raport, false);
+  assert.deepEqual(raport.layout.sections.map(section => section.title), ["Podsumowanie", "Najważniejsze informacje", "Wnioski"]);
+  assert.deepEqual(porownanie.fields.map(field => field.name), ["firma1", "firma2", "firma3", "kryteria"]);
+  assert.equal(porownanie.layout.type, "comparison");
+  for (const mission of [raport, porownanie]) {
+    assert.equal("instructions" in mission, false);
+    assert.equal("research" in mission, false);
+  }
+});
+
+test("kryteria po przecinku: bez pustych i powtórzeń", () => {
+  assert.deepEqual(parseCriteria(" cena, , Opinie ,cena,  czas   dostawy "), ["cena", "Opinie", "czas dostawy"]);
 });
 
 test("endpoint misji z atrapą OpenRouter", async (t) => {
@@ -122,5 +131,103 @@ test("endpoint misji z atrapą OpenRouter", async (t) => {
     response = await run();
     assert.equal(response.status, 503);
     assert.equal((await response.json()).error.code, "configuration");
+  });
+
+  const compare = (input) => POST(request({ missionId: "porownanie", input: {
+    firma1: "Alfa", firma2: "Beta", firma3: "Gamma", kryteria: "cena, opinie", ...input } }));
+  const isResearch = (body) => Array.isArray(body.tools) && body.tools.some(tool => tool.type === "openrouter:web_search");
+  const userText = (body) => {
+    const content = body.messages.find(message => message.role === "user").content;
+    return typeof content === "string" ? content : content.map(part => part.text).join("");
+  };
+
+  await t.test("porównanie: zła liczba kryteriów albo te same firmy: 400 bez modelu", async () => {
+    reset();
+    for (const kryteria of ["cena", "cena, cena", "a, b, c, d, e, f"]) {
+      const response = await compare({ kryteria });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.code, "criteria");
+    }
+    const response = await compare({ firma3: "alfa" });
+    assert.equal((await response.json()).error.code, "duplicates");
+    assert.equal(calls.length, 0);
+  });
+
+  await t.test("porównanie: dwa kroki, tabela z pól, brak danych bez zgadywania, źródła z wyszukiwania", async () => {
+    reset();
+    const bodies = [];
+    respond = (body) => {
+      bodies.push(body);
+      if (isResearch(body)) {
+        // Krok 1: bez structured output i bez require_parameters (jak w czacie).
+        assert.equal(body.response_format, undefined);
+        assert.equal(body.provider?.require_parameters, undefined);
+        const text = userText(body);
+        if (text.includes("Alfa")) return completion("cena: 10 zł\nopinie: 4,5/5", [citation("https://alfa.example/cennik", "Cennik Alfa")]);
+        if (text.includes("Beta")) return completion("cena: brak danych\nopinie: 3/5", [citation("https://beta.example/o-nas", "Beta")]);
+        return completion("cena: 5 zł (z pamięci)\nopinie: świetne");
+      }
+      // Krok 2: sam structured output, bez narzędzi, z notatkami z kroku 1.
+      assert.equal(body.tools, undefined);
+      assert.equal(body.response_format.json_schema.strict, true);
+      const schema = body.response_format.json_schema.schema;
+      assert.deepEqual(Object.keys(schema.properties.tabela.properties), ["firma_1", "firma_2", "firma_3"]);
+      assert.deepEqual(schema.properties.rekomendacja.enum, ["firma_1", "firma_2", "firma_3", "brak"]);
+      assert.match(userText(body), /Cennik Alfa/);
+      assert.match(userText(body), /Wyszukiwanie nie zwróciło żadnych stron/);
+      return completion(JSON.stringify({
+        tabela: {
+          firma_1: { kryterium_1: "10 zł", kryterium_2: "4,5/5" },
+          firma_2: { kryterium_1: "0", kryterium_2: "3/5" },
+          firma_3: { kryterium_1: "5 zł", kryterium_2: "świetne" },
+        },
+        rekomendacja: "firma_1", uzasadnienie: "Alfa ma najlepsze opinie przy podanej cenie.",
+      }));
+    };
+    const response = await compare({});
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(bodies.filter(isResearch).length, 3);
+    assert.equal(bodies.length, 4);
+    assert.deepEqual(body.result.companies, ["Alfa", "Beta", "Gamma"]);
+    assert.deepEqual(body.result.criteria, ["cena", "opinie"]);
+    // „0” zamienione na „brak danych”; Gamma bez żadnego źródła: cała kolumna „brak danych”.
+    assert.deepEqual(body.result.cells, [["10 zł", "brak danych", "brak danych"], ["4,5/5", "3/5", "brak danych"]]);
+    assert.deepEqual(body.result.recommendation, { company: "Alfa", reason: "Alfa ma najlepsze opinie przy podanej cenie." });
+    assert.equal(body.result.notes.length, 1);
+    assert.match(body.result.notes[0], /Gamma/);
+    assert.deepEqual(body.sources, [
+      { url: "https://alfa.example/cennik", title: "Cennik Alfa", group: "Alfa" },
+      { url: "https://beta.example/o-nas", title: "Beta", group: "Beta" },
+    ]);
+  });
+
+  await t.test("porównanie: rekomendacja firmy bez źródeł jest odrzucana", async () => {
+    reset();
+    respond = (body) => {
+      if (isResearch(body)) {
+        return userText(body).includes("Alfa")
+          ? completion("cena: 10 zł", [citation("https://alfa.example", "Alfa")])
+          : completion("brak danych");
+      }
+      return completion(JSON.stringify({
+        tabela: { firma_1: { kryterium_1: "10 zł", kryterium_2: "brak danych" },
+          firma_2: { kryterium_1: "x", kryterium_2: "y" }, firma_3: { kryterium_1: "x", kryterium_2: "y" } },
+        rekomendacja: "firma_3", uzasadnienie: "Gamma jest najlepsza.",
+      }));
+    };
+    const body = await (await compare({})).json();
+    assert.equal(body.result.recommendation.company, null);
+    assert.match(body.result.recommendation.reason, /Za mało danych/);
+  });
+
+  await t.test("porównanie: wszystkie wyszukiwania nieudane: czytelny błąd", async () => {
+    reset();
+    respond = (body) => isResearch(body)
+      ? Response.json({ error: { message: "down", code: 500 } }, { status: 500 })
+      : assert.fail("krok 2 nie powinien się wykonać");
+    const response = await compare({});
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, "provider");
   });
 });

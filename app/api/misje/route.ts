@@ -4,7 +4,7 @@ import { sameOrigin } from "../../../lib/request-origin";
 import { AUTH_MESSAGES } from "../../../lib/auth-messages";
 import { findMission } from "../../../lib/missions";
 import { runMission } from "../../../lib/mission-runner";
-import { MISSION_ERRORS, missionInputSchema, type MissionErrorCode } from "../../../lib/mission-schema";
+import { layoutInputError, MISSION_ERRORS, missionInputSchema, type MissionErrorCode } from "../../../lib/mission-schema";
 
 export const maxDuration = 120;
 
@@ -34,8 +34,12 @@ export async function POST(request: Request) {
   if (!mission) return missionFailure("unknown", 404);
   const input = missionInputSchema(mission.fields).safeParse(parsed.data.input);
   if (!input.success) return missionFailure("input", 400);
+  const values = input.data as Record<string, string>;
+  // Np. porównanie: 2–5 różnych kryteriów i trzy różne firmy, zanim cokolwiek trafi do modelu.
+  const layoutError = layoutInputError(mission.layout, values);
+  if (layoutError) return missionFailure(layoutError, 400);
 
-  const outcome = await runMission(mission, input.data as Record<string, string>, request.signal);
+  const outcome = await runMission(mission, values, request.signal);
   if (!outcome.ok) return missionFailure(outcome.code, outcome.status);
   // Wynik to tylko tekst do przeczytania: nic nie jest zapisywane w bazie ani wysyłane.
   return Response.json({ result: outcome.result, sources: outcome.sources }, { headers: { "Cache-Control": "no-store" } });
