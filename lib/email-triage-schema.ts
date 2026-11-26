@@ -6,7 +6,7 @@ export const TRIAGE_MAX_EMAIL_CHARS = 12_000;
 export const TRIAGE_MAX_INPUT_CHARS = 130_000;
 export const TRIAGE_SIGNATURE = "Zespół obsługi";
 
-export const TRIAGE_CATEGORIES = ["oferta i ceny", "problem techniczny", "płatności", "reklamacja", "inne"] as const;
+export const TRIAGE_CATEGORIES = ["konsultacje i terminy", "oferta i ceny", "płatności i faktury", "problem techniczny", "inne"] as const;
 export const TRIAGE_PRIORITIES = ["wysoki", "średni", "niski"] as const;
 
 // Schemat przekazywany modelowi jako JSON Schema (structured output): tylko proste typy

@@ -58,7 +58,8 @@ test("podział maili po linii z trzema myślnikami", () => {
 
 test("schemat wyniku: enumy, podpis i brak dodatkowych pól", () => {
   assert.equal(triageResultSchema.safeParse(valid).success, true);
-  for (const bad of [{ ...valid, kategoria: "sales" }, { ...valid, priorytet: "pilny" },
+  assert.equal(triageResultSchema.safeParse({ ...valid, kategoria: "konsultacje i terminy" }).success, true);
+  for (const bad of [{ ...valid, kategoria: "sales" }, { ...valid, kategoria: "reklamacja" }, { ...valid, priorytet: "pilny" },
     { ...valid, szkic: "Dziękujemy." }, { ...valid, extra: 1 }, { ...valid, nadawca: " " }]) {
     assert.equal(triageResultSchema.safeParse(bad).success, false);
   }
@@ -124,8 +125,14 @@ test("endpoint triage z atrapą OpenRouter i bazy wiedzy", async (t) => {
       if (!checkedSchema && body.messages.some(message => message.role === "tool")) {
         const schema = body.response_format.json_schema.schema;
         assert.equal(body.response_format.json_schema.strict, true);
-        assert.deepEqual(schema.properties.kategoria.enum, ["oferta i ceny", "problem techniczny", "płatności", "reklamacja", "inne"]);
+        assert.deepEqual(schema.properties.kategoria.enum, ["konsultacje i terminy", "oferta i ceny", "płatności i faktury", "problem techniczny", "inne"]);
         assert.deepEqual(schema.properties.priorytet.enum, ["wysoki", "średni", "niski"]);
+        // Zasady priorytetu Studio Nova i bieżący czas trafiają do instrukcji modelu.
+        const content = body.messages.find(message => message.role === "system").content;
+        const system = typeof content === "string" ? content : content.map(part => part.text).join("");
+        assert.match(system, /opłaconą konsultację, która zaczyna się\s+w ciągu 24 godzin/);
+        assert.match(system, /niski = podziękowania, opinie, reklamy i newslettery/);
+        assert.match(system, /Czas sortowania: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}/);
         checkedSchema = true;
       }
       return agent((mail) => mail.includes("ZEPSUTY")
