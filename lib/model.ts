@@ -1,5 +1,6 @@
 import "server-only";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
+import { warsawTime } from "./chat-tools";
 
 // Model rozmowy: nazwa w zmiennej OPENROUTER_MODEL.
 export function chatModelId(): string | undefined {
@@ -20,4 +21,17 @@ export function embeddingModel() {
     throw new Error("Skonfiguruj OPENROUTER_API_KEY i OPENROUTER_EMBEDDING_MODEL na serwerze.");
   }
   return createOpenRouter({ apiKey }).textEmbeddingModel(modelId);
+}
+
+// Wyszukiwanie w internecie (narzędzie serwerowe OpenRouter), wspólne dla czatu i misji.
+// Wyniki wracają jako źródła (url_citation) od OpenRoutera, a nie jako adresy wpisane przez model.
+export function webSearchTool(openrouter: ReturnType<typeof createOpenRouter>, { maxResults = 3 }: { maxResults?: number } = {}) {
+  return openrouter.tools.webSearch({
+    maxResults,
+    engine: "native",
+    searchPrompt: `Bieżąca data w Europe/Warsaw: ${warsawTime().data}. ` +
+      "Dla pytań o najnowsze informacje szukaj najpierw publikacji z ostatnich 7 dni, " +
+      "potem 30 dni. Preferuj oficjalne ogłoszenia i sprawdzaj daty publikacji oraz wydarzeń. " +
+      "Nie przedstawiaj starszych wyników jako najnowszych bez potwierdzenia.",
+  });
 }

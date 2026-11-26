@@ -14,7 +14,8 @@ import {
 import { chatMessageMetadataSchema, type ChatMessage } from "./chat-message";
 import { AGENT_CHAT_INSTRUCTIONS } from "./studio-nova";
 import { CHAT_ERRORS } from "./chat-errors";
-import { needsCurrentDate, warsawTime } from "./chat-tools";
+import { needsCurrentDate } from "./chat-tools";
+import { webSearchTool } from "./model";
 import { validPhotoPart } from "./image-validation";
 import { IMAGE_MESSAGES } from "./image-input";
 import { imageToolInputSchema } from "./image-tool-schema";
@@ -121,14 +122,7 @@ export async function agentChat(
       .filter((part) => part.type === "text").map((part) => part.text).join(" ");
     const checkDateFirst = needsCurrentDate(lastQuestion);
     const tools = {
-      web_search: openrouter.tools.webSearch({
-        maxResults: 3,
-        engine: "native",
-        searchPrompt: `Bieżąca data w Europe/Warsaw: ${warsawTime().data}. ` +
-          "Dla pytań o najnowsze informacje szukaj najpierw publikacji z ostatnich 7 dni, " +
-          "potem 30 dni. Preferuj oficjalne ogłoszenia i sprawdzaj daty publikacji oraz wydarzeń. " +
-          "Nie przedstawiaj starszych wyników jako najnowszych bez potwierdzenia.",
-      }),
+      web_search: webSearchTool(openrouter),
       ...localTools,
     };
     for (const [name, entry] of Object.entries(tools)) {
