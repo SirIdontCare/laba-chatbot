@@ -42,5 +42,6 @@ export async function POST(request: Request) {
   const outcome = await runMission(mission, values, request.signal);
   if (!outcome.ok) return missionFailure(outcome.code, outcome.status);
   // Wynik to tylko tekst do przeczytania: nic nie jest zapisywane w bazie ani wysyłane.
-  return Response.json({ result: outcome.result, sources: outcome.sources }, { headers: { "Cache-Control": "no-store" } });
+  return Response.json({ result: outcome.result, sources: outcome.sources, completedAt: new Date().toISOString() },
+    { headers: { "Cache-Control": "no-store" } });
 }

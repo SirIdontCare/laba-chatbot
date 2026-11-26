@@ -13,9 +13,11 @@ export type MissionField = {
 };
 
 // Sekcja wyniku: "text" = akapit, "list" = punkty (min–max). Źródła dokłada serwer.
+// cite: każdy punkt kończy się numerem źródła, np. „… [2]”, z listy ponumerowanych źródeł.
+// needsSources: gdy wyszukiwanie nic nie zwróciło, sekcja może (a przy cite musi) być pusta.
 export type MissionSection =
   | { key: string; title: string; kind: "text"; hint: string }
-  | { key: string; title: string; kind: "list"; min: number; max: number; hint: string };
+  | { key: string; title: string; kind: "list"; min: number; max: number; hint: string; cite?: boolean; needsSources?: boolean };
 
 // Układ wyniku misji:
 // - "sections": sekcje tekstu i punktów w podanej kolejności (np. Raport),
@@ -75,9 +77,21 @@ export function missionModelSchema(sections: MissionSection[]) {
     section.kind === "text" ? z.string().describe(section.hint) : z.array(z.string()).describe(section.hint)])));
 }
 
+// Numery źródeł na końcu punktu, np. „… [1][3]” albo „… [2, 4]” → [1, 3] / [2, 4]. Brak = [].
+const CITATION_END = /(?:\s*\[\s*\d+(?:\s*,\s*\d+)*\s*\])+\s*\.?$/;
+export function citedNumbers(point: string): number[] {
+  const tail = point.match(CITATION_END)?.[0] ?? "";
+  return [...tail.matchAll(/\d+/g)].map(match => Number(match[0]));
+}
+// Punkt z numerami, które wszystkie istnieją na liście źródeł 1..sourceCount.
+export const hasValidCitation = (point: string, sourceCount: number) => {
+  const numbers = citedNumbers(point);
+  return numbers.length > 0 && numbers.every(number => number >= 1 && number <= sourceCount);
+};
+
 // Pełne sprawdzenie wyniku na serwerze i ponownie w przeglądarce: niepuste teksty,
-// liczba punktów w podanym zakresie, rozsądne długości.
-export function missionResultSchema(sections: MissionSection[]) {
+// liczba punktów w podanym zakresie, rozsądne długości, numery źródeł z listy.
+export function missionResultSchema(sections: MissionSection[], sourceCount: number) {
   return missionModelSchema(sections).superRefine((result, context) => {
     for (const section of sections) {
       const value = result[section.key];
@@ -85,9 +99,16 @@ export function missionResultSchema(sections: MissionSection[]) {
         if (typeof value !== "string" || !value.trim() || value.length > MAX_TEXT_CHARS) {
           context.addIssue({ code: "custom", path: [section.key], message: `Sekcja „${section.title}” jest pusta lub za długa.` });
         }
-      } else if (!Array.isArray(value) || value.length < section.min || value.length > section.max ||
+        continue;
+      }
+      const noSources = sourceCount === 0 && section.needsSources;
+      const min = noSources ? 0 : section.min;
+      const max = noSources && section.cite ? 0 : section.max;
+      if (!Array.isArray(value) || value.length < min || value.length > max ||
         value.some(point => !point.trim() || point.length > MAX_POINT_CHARS)) {
-        context.addIssue({ code: "custom", path: [section.key], message: `Sekcja „${section.title}” musi mieć ${section.min}–${section.max} punktów.` });
+        context.addIssue({ code: "custom", path: [section.key], message: `Sekcja „${section.title}” musi mieć ${min}–${max} punktów.` });
+      } else if (section.cite && value.some(point => !hasValidCitation(point, sourceCount))) {
+        context.addIssue({ code: "custom", path: [section.key], message: `Każdy punkt sekcji „${section.title}” musi kończyć się numerem źródła z listy.` });
       }
     }
   });
@@ -95,18 +116,42 @@ export function missionResultSchema(sections: MissionSection[]) {
 
 // --- Układ "comparison" ---
 
+// Komórka tabeli: wartość i skąd pochodzi. source/host są ustawione tylko wtedy, gdy serwer
+// potwierdził źródło wśród stron zwróconych przez wyszukiwanie dla tej firmy.
+// independent: true = niezależny serwis (np. Trustpilot), false = strona lub dane samej firmy.
+export const comparisonCellSchema = z.strictObject({
+  value: z.string().min(1).max(MAX_CELL_CHARS),
+  source: z.string().max(100).nullable(),
+  host: z.string().max(253).nullable(),
+  independent: z.boolean().nullable(),
+});
+export type ComparisonCell = z.infer<typeof comparisonCellSchema>;
+
+// Podpis źródła komórki, np. „Trustpilot” albo „allegro.pl, dane firmy”.
+export function sourceLabel(item: ComparisonCell) {
+  if (!item.source) return "źródło nieustalone";
+  return item.independent === false ? `${item.source}, dane firmy` : item.source;
+}
+
 // Gotowa tabela, którą serwer składa z pól sprawdzonych na serwerze (nie z tekstu modelu).
-// cells[i][j] = ocena firmy j według kryterium i.
+// cells[i][j] = ocena firmy j według kryterium i. mixedSources[i] = true, gdy w wierszu i
+// wartości pochodzą z różnych serwisów albo część z nich to dane samych firm.
 export const comparisonResultSchema = z.strictObject({
   companies: z.array(z.string().min(1)).min(2).max(5),
   criteria: z.array(z.string().min(1)).min(1).max(10),
-  cells: z.array(z.array(z.string().min(1).max(MAX_CELL_CHARS))),
-  recommendation: z.strictObject({ company: z.string().nullable(), reason: z.string().min(1).max(400) }),
-  notes: z.array(z.string()).max(10),
-}).refine(result => result.cells.length === result.criteria.length &&
+  cells: z.array(z.array(comparisonCellSchema)),
+  mixedSources: z.array(z.boolean()),
+  // company + condition: „{company} — najlepszy wybór, jeśli zależy Ci na {condition}.”; bez company: brak podstaw.
+  recommendation: z.strictObject({
+    company: z.string().nullable(), condition: z.string().max(200).nullable(), reason: z.string().min(1).max(400),
+  }),
+  notes: z.array(z.string()).max(12),
+}).refine(result => result.cells.length === result.criteria.length && result.mixedSources.length === result.criteria.length &&
   result.cells.every(row => row.length === result.companies.length), { message: "Tabela ma złe wymiary." })
   .refine(result => result.recommendation.company === null || result.companies.includes(result.recommendation.company),
-    { message: "Rekomendacja wskazuje firmę spoza porównania." });
+    { message: "Rekomendacja wskazuje firmę spoza porównania." })
+  .refine(result => (result.recommendation.company === null) === (result.recommendation.condition === null),
+    { message: "Rekomendacja musi mieć warunek." });
 export type ComparisonResult = z.infer<typeof comparisonResultSchema>;
 
 // --- Odpowiedź endpointu ---
@@ -123,13 +168,20 @@ export const missionResponseSchema = z.strictObject({
   result: z.unknown(),
   // Wyłącznie strony zwrócone przez wyszukiwanie (url_citation od OpenRoutera), nie adresy z tekstu modelu.
   sources: z.array(missionSourceSchema).max(30),
+  // Kiedy serwer zakończył misję (ISO 8601); strona pokazuje to pod wynikiem.
+  completedAt: z.iso.datetime(),
 });
 
 // Sprawdza wynik zgodnie z układem misji (przeglądarka robi to ponownie przed wyświetleniem).
-export function parseMissionResult(layout: MissionLayout, result: unknown) {
+export function parseMissionResult(layout: MissionLayout, result: unknown, sourceCount: number) {
   return layout.type === "sections"
-    ? missionResultSchema(layout.sections).safeParse(result)
+    ? missionResultSchema(layout.sections, sourceCount).safeParse(result)
     : comparisonResultSchema.safeParse(result);
+}
+
+// Data i godzina wykonania misji w Polsce, np. „26 listopada 2026 14:05”.
+export function formatCompletedAt(iso: string) {
+  return new Intl.DateTimeFormat("pl-PL", { dateStyle: "long", timeStyle: "short", timeZone: "Europe/Warsaw" }).format(new Date(iso));
 }
 
 export const MISSION_ERRORS = {
