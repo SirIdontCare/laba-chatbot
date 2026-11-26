@@ -16,6 +16,7 @@ const { installFakeAuth, TEST_AUTH_COOKIE } = require("./fake-auth.cjs");
 installFakeAuth();
 const { splitEmails, triageResultSchema } = require("../lib/email-triage-schema.ts");
 const { POST } = require("../app/api/email-triage/route.ts");
+const { knowledgeQuery } = require("../lib/email-triage.ts");
 const { USER_DB_URL } = require("./fake-auth.cjs");
 const { EMBEDDING_DIMENSIONS } = require("../lib/model.ts");
 const origin = "http://localhost:3000";
@@ -56,6 +57,12 @@ test("podział maili po linii z trzema myślnikami", () => {
   assert.deepEqual(splitEmails("   "), []);
 });
 
+test("zapytanie do bazy wiedzy z tematu i treści, bez nagłówków", () => {
+  const query = knowledgeQuery("Od: Anna <a@example.com>\nTemat: Cena konsultacji\n\nIle kosztuje konsultacja online?");
+  assert.equal(query, "Cena konsultacji Ile kosztuje konsultacja online?");
+  assert.equal(knowledgeQuery("x".repeat(900)).length, 500);
+});
+
 test("schemat wyniku: enumy, podpis i brak dodatkowych pól", () => {
   assert.equal(triageResultSchema.safeParse(valid).success, true);
   assert.equal(triageResultSchema.safeParse({ ...valid, kategoria: "konsultacje i terminy" }).success, true);
@@ -92,16 +99,19 @@ test("endpoint triage z atrapą OpenRouter i bazy wiedzy", async (t) => {
       { document_id: 1, title: "Cennik 2026", content: "Pakiet Start kosztuje 490 zł netto miesięcznie.", similarity: 0.7 },
     ]);
   };
-  const mailOf = (body) => body.messages.find(message => message.role === "user").content;
-  // Krok 0: wymuszone wywołanie searchKnowledge. Krok 1: wynik JSON (do testu podaje go `final`).
+  const userText = (body) => {
+    const content = body.messages.find(message => message.role === "user").content;
+    return typeof content === "string" ? content : content.map(part => part.text).join("");
+  };
+  const mailOf = (body) => userText(body).match(/<mail>\n([\s\S]*?)\n<\/mail>/)[1];
+  // Bazę wiedzy przeszukuje serwer przed wywołaniem modelu; model dostaje sam structured output,
+  // bez narzędzi (ten sam kształt zapytania co „Analiza JSON”).
   const agent = (final) => (body) => {
-    const mail = mailOf(body);
-    if (!body.messages.some(message => message.role === "tool")) {
-      assert.deepEqual(body.tool_choice, { type: "function", function: { name: "searchKnowledge" } });
-      return toolCall("searchKnowledge", { pytanie: mail.slice(0, 100) });
-    }
-    assert.equal(body.tool_choice, "none");
-    return completion(JSON.stringify(final(mail)));
+    assert.equal(body.tools, undefined);
+    assert.equal(body.tool_choice, undefined);
+    assert.equal(body.parallel_tool_calls, undefined);
+    assert.match(userText(body), /<baza_wiedzy>/);
+    return completion(JSON.stringify(final(mailOf(body))));
   };
 
   await t.test("bez ciasteczek 401 przed jakimkolwiek wywołaniem", async () => {
@@ -122,7 +132,8 @@ test("endpoint triage z atrapą OpenRouter i bazy wiedzy", async (t) => {
     reset();
     let checkedSchema = false;
     respond = (body) => {
-      if (!checkedSchema && body.messages.some(message => message.role === "tool")) {
+      if (!checkedSchema) {
+        assert.match(userText(body), /Pakiet Start kosztuje 490 zł/);
         const schema = body.response_format.json_schema.schema;
         assert.equal(body.response_format.json_schema.strict, true);
         assert.deepEqual(schema.properties.kategoria.enum, ["konsultacje i terminy", "oferta i ceny", "płatności i faktury", "problem techniczny", "inne"]);
@@ -145,7 +156,7 @@ test("endpoint triage z atrapą OpenRouter i bazy wiedzy", async (t) => {
     const { cards } = await response.json();
     assert.equal(checkedSchema, true);
     assert.equal(cards.length, 3);
-    assert.equal(calls.filter(url => url.endsWith("/chat/completions")).length, 6);
+    assert.equal(calls.filter(url => url.endsWith("/chat/completions")).length, 3);
     assert.equal(calls.filter(url => url.endsWith("/rpc/match_chunks")).length, 3);
     assert.equal(cards[0].ok, true);
     assert.equal(cards[0].result.temat, "pierwszy");
@@ -161,8 +172,11 @@ test("endpoint triage z atrapą OpenRouter i bazy wiedzy", async (t) => {
   await t.test("baza wiedzy niedostępna: wynik bez źródeł, z informacją", async () => {
     reset();
     rpcReply = () => Response.json({ message: "down" }, { status: 500 });
-    respond = agent(() => ({ ...modelValid, zrodla: ["Cennik 2026"],
-      szkic: "Dziękujemy za pytanie. Cena pakietu: [DO UZUPEŁNIENIA: cena pakietu Start].\nZespół obsługi" }));
+    respond = (body) => {
+      assert.match(userText(body), /Nie udało się sprawdzić bazy wiedzy\./);
+      return agent(() => ({ ...modelValid, zrodla: ["Cennik 2026"],
+      szkic: "Dziękujemy za pytanie. Cena pakietu: [DO UZUPEŁNIENIA: cena pakietu Start].\nZespół obsługi" }))(body);
+    };
     const { cards } = await (await POST(request({ text: "Ile kosztuje pakiet Start?" }))).json();
     assert.equal(cards[0].ok, true);
     assert.deepEqual(cards[0].sources, []);

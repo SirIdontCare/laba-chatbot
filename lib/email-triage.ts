@@ -1,9 +1,8 @@
 import "server-only";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import { generateText, isStepCount, NoObjectGeneratedError, Output } from "ai";
+import { APICallError, generateText, NoObjectGeneratedError, Output } from "ai";
 import { AnalysisError, hasRefusal, requireStructuredOutput } from "./analyze-message";
-import { createKnowledgeSearchTool } from "./knowledge-search";
-import { knowledgeOutputSchema } from "./knowledge-schema";
+import { searchKnowledgeBase } from "./knowledge-search";
 import type { SignedInUser } from "./supabase-server";
 import { warsawTime } from "./chat-tools";
 import {
@@ -15,9 +14,9 @@ import {
 export const EMAIL_TRIAGE_INSTRUCTIONS = `Jesteś asystentem Studio Nova, firmy prowadzącej konsultacje online.
 Sortujesz JEDEN e-mail od klienta i przygotowujesz wynik zgodny z przekazanym schematem.
 
-Krok 1. Najpierw wywołaj narzędzie searchKnowledge (baza wiedzy Studio Nova) z krótkim pytaniem
-o sedno maila, np. „cena konsultacji”, „zmiana terminu konsultacji”, „faktura za konsultację”.
-Krok 2. Przeczytaj zwrócone fragmenty i dopiero wtedy przygotuj wynik.
+Dostajesz mail w znacznikach <mail> oraz wynik wyszukiwania w bazie wiedzy Studio Nova
+w znacznikach <baza_wiedzy> (fragmenty z polami tytul i tresc albo informacja o braku wyników).
+Najpierw przeczytaj fragmenty, a dopiero potem przygotuj wynik.
 
 Pola:
 - nadawca: kto napisał (z nagłówka „Od:”, podpisu lub adresu). Gdy nie da się ustalić: „nieznany nadawca”.
@@ -78,7 +77,18 @@ function failure(code: TriageErrorCode): TriageCard {
   return { ok: false, error: { code, message: TRIAGE_ERRORS[code] } };
 }
 
-// Jeden mail = jedno zadanie modelu: wyszukiwanie w bazie wiedzy, potem wynik w ustalonych polach.
+// Zapytanie do bazy wiedzy budowane z maila: temat i początek treści bez nagłówków
+// (searchKnowledgeBase przyjmuje do 500 znaków).
+export function knowledgeQuery(email: string) {
+  const lines = email.split("\n").map(line => line.trim()).filter(Boolean);
+  const subject = lines.find(line => /^temat\s*:/i.test(line))?.replace(/^temat\s*:\s*/i, "") ?? "";
+  const body = lines.filter(line => !/^(od|do|temat|data|from|to|subject|date)\s*:/i.test(line)).join(" ");
+  return `${subject} ${body}`.replace(/\s+/g, " ").trim().slice(0, 500) || email.trim().slice(0, 500);
+}
+
+// Jeden mail = najpierw wyszukiwanie w bazie wiedzy (na serwerze), potem jedno wywołanie modelu
+// z wynikiem w ustalonych polach. Model nie dostaje narzędzi, więc zapytanie do OpenRoutera ma ten
+// sam kształt co „Analiza JSON” (sam structured output), a dostawca nie musi obsługiwać narzędzi.
 // Błąd zwraca kartę z komunikatem zamiast wyjątku, żeby pozostałe maile miały normalne wyniki.
 async function triageOne(email: string, openrouter: ReturnType<typeof createOpenRouter>, model: string,
   owner: SignedInUser, signal: AbortSignal): Promise<TriageCard> {
@@ -86,27 +96,31 @@ async function triageOne(email: string, openrouter: ReturnType<typeof createOpen
   const abortSignal = AbortSignal.any([signal, AbortSignal.timeout(60_000)]);
   let refused = false;
   try {
+    // Ta sama funkcja, z której korzysta narzędzie searchKnowledge: baza zalogowanej osoby (RLS).
+    // Nie rzuca wyjątków: błąd wraca jako ok=false.
+    const knowledge = await searchKnowledgeBase(owner, { pytanie: knowledgeQuery(email) },
+      AbortSignal.any([abortSignal, AbortSignal.timeout(15_000)]));
+    if (abortSignal.aborted) return failure("interrupted");
+    const fragments = knowledge.ok ? knowledge.fragmenty : [];
+    const knowledgeBlock = knowledge.ok
+      ? fragments.length
+        ? JSON.stringify(fragments.map(({ tytul, tresc }) => ({ tytul, tresc })))
+        : "Brak pasujących fragmentów w bazie wiedzy."
+      : "Nie udało się sprawdzić bazy wiedzy.";
+
     const result = await generateText({
       model: openrouter.chat(model, {
         structuredOutputs: { strict: true },
         provider: { require_parameters: true },
-        parallelToolCalls: false,
       }),
-      // Ta sama funkcja co narzędzie searchKnowledge w czacie: baza zalogowanej osoby (RLS).
-      tools: { searchKnowledge: createKnowledgeSearchTool(owner) },
-      // Krok 0: wyszukiwanie jest wymuszone, żeby szkic nigdy nie powstał bez sprawdzenia bazy.
-      // Krok 1: już bez narzędzi, tylko wynik zgodny ze schematem.
-      prepareStep: ({ stepNumber }) => stepNumber === 0
-        ? { toolChoice: { type: "tool", toolName: "searchKnowledge" } }
-        : { toolChoice: "none" },
-      stopWhen: isStepCount(3),
       output: Output.object({ schema: triageModelSchema, name: "email_triage" }),
       instructions: `${EMAIL_TRIAGE_INSTRUCTIONS}\n\nCzas sortowania: ${sortedAt()}.`,
-      messages: [{ role: "user", content: email }],
+      messages: [{ role: "user", content:
+        `<mail>\n${email}\n</mail>\n\n<baza_wiedzy>\n${knowledgeBlock}\n</baza_wiedzy>` }],
       abortSignal,
       maxRetries: 0,
       include: { responseBody: true },
-      // Odmowa to błąd, nawet gdy odpowiedź zawiera poprawny JSON.
+      // Odmowa lub niedokończona odpowiedź to błąd, nawet gdy zawiera poprawny JSON.
       onStepEnd: ({ finishReason, response }) => {
         if (finishReason === "content-filter" || hasRefusal(response.body)) refused = true;
       },
@@ -123,22 +137,24 @@ async function triageOne(email: string, openrouter: ReturnType<typeof createOpen
     if (!validated.success) return failure("invalid_output");
 
     // Źródło pokazujemy tylko wtedy, gdy wyszukiwanie naprawdę zwróciło fragment z tego dokumentu.
-    const found = new Set<string>();
-    let searched = false;
-    for (const toolResult of result.steps.flatMap(step => step.toolResults)) {
-      if (toolResult.toolName !== "searchKnowledge") continue;
-      const output = knowledgeOutputSchema.safeParse(toolResult.output);
-      if (!output.success || !output.data.ok) continue;
-      searched = true;
-      for (const fragment of output.data.fragmenty) found.add(fragment.tytul);
-    }
+    const found = new Set(fragments.map(fragment => fragment.tytul));
     const sources = [...new Set(zrodla.map(title => title.trim()))].filter(title => found.has(title)).slice(0, 10);
-    return { ok: true, result: validated.data, sources, ...(searched ? {} : { knowledgeNote: KNOWLEDGE_UNAVAILABLE }) };
+    return { ok: true, result: validated.data, sources, ...(knowledge.ok ? {} : { knowledgeNote: KNOWLEDGE_UNAVAILABLE }) };
   } catch (error) {
     if (abortSignal.aborted) return failure("interrupted");
     if (refused) return failure("refused");
     if (NoObjectGeneratedError.isInstance(error)) return failure("invalid_output");
-    // Bez surowej odpowiedzi, sekretów i treści maila w komunikacie lub logach.
+    if (APICallError.isInstance(error)) {
+      // W logu tylko kod HTTP: bez treści maila, odpowiedzi dostawcy i sekretów.
+      console.error(`[email-triage] błąd dostawcy AI: HTTP ${error.statusCode ?? "brak"}`);
+      const detail = `${error.message} ${error.responseBody ?? ""}`;
+      if ([400, 404, 422].includes(error.statusCode ?? 0) &&
+        /structured.?output|response_format|json_schema|require_parameters|no endpoints found/i.test(detail)) {
+        return failure("unsupported");
+      }
+    } else {
+      console.error("[email-triage] błąd przy mailu:", error instanceof Error ? error.name : "nieznany");
+    }
     return failure("provider");
   }
 }
